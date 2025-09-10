@@ -1,0 +1,70 @@
+// Copyright Contributors to the Open Cluster Management project
+
+syntax = "proto3";
+
+package search.indexer;
+option go_package = "github.com/stolostron/search-collector/pkg/grpc/proto";
+
+service SearchIndexer {
+  // Sync resources with the indexer
+  rpc Sync(SyncRequest) returns (SyncResponse);
+  
+  // Health check
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message SyncRequest {
+  string cluster_id = 1;
+  bool overwrite_state = 2;
+  repeated Resource add_resources = 3;
+  repeated Resource update_resources = 4;
+  repeated DeleteResourceEvent delete_resources = 5;
+  repeated Edge add_edges = 6;
+  repeated Edge delete_edges = 7;
+}
+
+message SyncResponse {
+  int32 total_added = 1;
+  int32 total_updated = 2;
+  int32 total_deleted = 3;
+  int32 total_resources = 4;
+  int32 total_edges_added = 5;
+  int32 total_edges_deleted = 6;
+  int32 total_edges = 7;
+  repeated SyncError add_errors = 8;
+  repeated SyncError update_errors = 9;
+  repeated SyncError delete_errors = 10;
+  repeated SyncError add_edge_errors = 11;
+  repeated SyncError delete_edge_errors = 12;
+  string version = 13;
+}
+
+message Resource {
+  string kind = 1;
+  string uid = 2;
+  string resource_string = 3;
+  map<string, string> properties = 4;
+}
+
+message Edge {
+  string source_uid = 1;
+  string dest_uid = 2;
+  string edge_type = 3;
+  string source_kind = 4;
+  string dest_kind = 5;
+}
+
+message DeleteResourceEvent {
+  string uid = 1;
+}
+
+message SyncError {
+  string resource_uid = 1;
+  string message = 2;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+}

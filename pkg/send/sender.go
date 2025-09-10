@@ -27,6 +27,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"github.com/stolostron/search-collector/pkg/config"
+	grpcclient "github.com/stolostron/search-collector/pkg/grpc"
 	"github.com/stolostron/search-collector/pkg/reconciler"
 	tr "github.com/stolostron/search-collector/pkg/transforms"
 )
@@ -79,10 +80,12 @@ type SyncError struct {
 
 // Keeps the total data for this cluster as well as the data since the last send operation.
 type Sender struct {
-	aggregatorURL      string // URL of the aggregator, minus any path
-	aggregatorSyncPath string // Path of the aggregator's POST route [ /aggregator/clusters/{clustername}/sync ]
+	aggregatorURL      string                  // URL of the aggregator, minus any path
+	aggregatorSyncPath string                  // Path of the aggregator's POST route [ /aggregator/clusters/{clustername}/sync ]
 	httpClient         http.Client
-	lastSentTime       int64 // Time we last successfully sent data to the hub. Gets reset to -1 if a send cycle fails.
+	grpcClient         *grpcclient.GRPCClient  // gRPC client for communication with search-indexer
+	useGRPC            bool                    // Whether to use gRPC for communication
+	lastSentTime       int64                   // Time we last successfully sent data to the hub. Gets reset to -1 if a send cycle fails.
 	rec                *reconciler.Reconciler
 }
 
@@ -93,6 +96,24 @@ func (s *Sender) reloadSender() {
 		s.aggregatorSyncPath = strings.Join([]string{"/", config.Cfg.ClusterName, "/aggregator/sync"}, "")
 	}
 	s.httpClient = getHTTPSClient()
+	s.useGRPC = config.Cfg.EnableGRPC
+
+	// Initialize gRPC client if enabled
+	if s.useGRPC {
+		if s.grpcClient != nil {
+			s.grpcClient.Close() // Close existing connection
+		}
+		
+		var err error
+		s.grpcClient, err = grpcclient.NewGRPCClient(config.Cfg.GRPCAddress, config.Cfg.DeployedInHub)
+		if err != nil {
+			klog.Warningf("Failed to initialize gRPC client, falling back to HTTP: %v", err)
+			s.useGRPC = false
+			s.grpcClient = nil
+		} else {
+			klog.Info("gRPC client initialized successfully")
+		}
+	}
 }
 
 // Constructs a new Sender using the provided channels.
@@ -106,10 +127,24 @@ func NewSender(rec *reconciler.Reconciler, aggregatorURL, clusterName string) *S
 		httpClient:         getHTTPSClient(),
 		lastSentTime:       -1,
 		rec:                rec,
+		useGRPC:            config.Cfg.EnableGRPC,
 	}
 
 	if !config.Cfg.DeployedInHub {
 		s.aggregatorSyncPath = strings.Join([]string{"/", clusterName, "/aggregator/sync"}, "")
+	}
+
+	// Initialize gRPC client if enabled
+	if s.useGRPC {
+		var err error
+		s.grpcClient, err = grpcclient.NewGRPCClient(config.Cfg.GRPCAddress, config.Cfg.DeployedInHub)
+		if err != nil {
+			klog.Warningf("Failed to initialize gRPC client during NewSender, falling back to HTTP: %v", err)
+			s.useGRPC = false
+			s.grpcClient = nil
+		} else {
+			klog.Info("gRPC client initialized successfully in NewSender")
+		}
 	}
 
 	return s
@@ -178,9 +213,71 @@ func (s *Sender) sendWithRetry(payload Payload, expectedTotalResources int, expe
 }
 
 // Sends data to the aggregator and returns an error if it didn't work.
-// Pointer receiver because Sender contains a mutex - that freaked the linter out even though it
-// doesn't use the mutex. Changed it so that if we do need to use the mutex we wont have any problems.
+// Tries gRPC first if enabled, falls back to HTTP on failure.
 func (s *Sender) send(payload Payload, expectedTotalResources int, expectedTotalEdges int) error {
+	// Try gRPC first if enabled
+	if s.useGRPC && s.grpcClient != nil {
+		err := s.sendViaGRPC(payload, expectedTotalResources, expectedTotalEdges)
+		if err == nil {
+			return nil // Success with gRPC
+		}
+		
+		// gRPC failed, log and fall back to HTTP
+		klog.Warningf("gRPC send failed, falling back to HTTP: %v", err)
+		s.useGRPC = false // Disable gRPC for subsequent requests
+		if s.grpcClient != nil {
+			s.grpcClient.Close()
+			s.grpcClient = nil
+		}
+	}
+	
+	// Use HTTP (either as fallback or primary method)
+	return s.sendViaHTTP(payload, expectedTotalResources, expectedTotalEdges)
+}
+
+// Sends data via gRPC to the search-indexer
+func (s *Sender) sendViaGRPC(payload Payload, expectedTotalResources int, expectedTotalEdges int) error {
+	klog.Infof("Sending via gRPC - Resources { add: %2d, update: %2d, delete: %2d, edge add: %2d, edge delete: %2d }",
+		len(payload.AddResources), len(payload.UpdatedResources), len(payload.DeletedResources),
+		len(payload.AddEdges), len(payload.DeleteEdges))
+
+	// Convert to gRPC payload
+	grpcPayload := grpcclient.CollectorPayload{
+		DeletedResources: payload.DeletedResources,
+		AddResources:     payload.AddResources,
+		UpdatedResources: payload.UpdatedResources,
+		AddEdges:         payload.AddEdges,
+		DeleteEdges:      payload.DeleteEdges,
+		ClearAll:         payload.ClearAll,
+		Version:          payload.Version,
+	}
+
+	// Make gRPC call with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	response, err := s.grpcClient.Sync(ctx, config.Cfg.ClusterName, grpcPayload)
+	if err != nil {
+		return fmt.Errorf("gRPC sync failed: %w", err)
+	}
+
+	// Validate response totals (same logic as HTTP)
+	if response.TotalResources != (expectedTotalResources + len(response.DeleteErrors) - len(response.AddErrors)) {
+		return fmt.Errorf("gRPC: Aggregator reported wrong number of total resources. Expected %d, got %d",
+			expectedTotalResources, response.TotalResources)
+	}
+
+	if response.TotalEdges != (expectedTotalEdges + len(response.DeleteEdgeErrors) - len(response.AddEdgeErrors)) {
+		return fmt.Errorf("gRPC: Aggregator reported wrong number of total edges. Expected %d, got %d",
+			expectedTotalEdges, response.TotalEdges)
+	}
+
+	klog.V(3).Info("gRPC sync completed successfully")
+	return nil
+}
+
+// Sends data via HTTP to the aggregator (original implementation)
+func (s *Sender) sendViaHTTP(payload Payload, expectedTotalResources int, expectedTotalEdges int) error {
 	klog.Infof("Sending Resources { add: %2d, update: %2d, delete: %2d, edge add: %2d, edge delete: %2d }",
 		len(payload.AddResources), len(payload.UpdatedResources), len(payload.DeletedResources),
 		len(payload.AddEdges), len(payload.DeleteEdges))

@@ -32,6 +32,8 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/prometheus/client_golang v1.22.0
 	github.com/stolostron/klusterlet-addon-controller v0.0.0-20221125104750-d4b167d5fae6
+	google.golang.org/grpc v1.64.1
+	google.golang.org/protobuf v1.36.8
 )
 
 require (
@@ -71,7 +73,7 @@ require (
 	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/term v0.32.0 // indirect
 	golang.org/x/text v0.25.0 // indirect
-	google.golang.org/protobuf v1.36.6 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250908214217-97024824d090 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20230717233707-2695361300d9 // indirect

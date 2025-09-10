@@ -30,6 +30,8 @@ const (
 	DEFAULT_AGGREGATOR_URL     = "https://localhost:3010" // this will be deprecated in the future
 	DEFAULT_AGGREGATOR_HOST    = "https://localhost"
 	DEFAULT_AGGREGATOR_PORT    = "3010"
+	DEFAULT_GRPC_HOST          = "localhost"
+	DEFAULT_GRPC_PORT          = "3011"
 	DEFAULT_CLUSTER_NAME       = "local-cluster"
 	DEFAULT_POD_NAMESPACE      = "open-cluster-management"
 	DEFAULT_HEARTBEAT_MS       = 300000 // 5 min
@@ -47,6 +49,10 @@ type Config struct {
 	AggregatorURL            string       `env:"AGGREGATOR_URL"`              // URL of the Aggregator, includes port but not any path
 	AggregatorHost           string       `env:"AGGREGATOR_HOST"`             // Host of the Aggregator
 	AggregatorPort           string       `env:"AGGREGATOR_PORT"`             // Port of the Aggregator
+	EnableGRPC               bool         `env:"ENABLE_GRPC"`                 // Enable gRPC communication with search-indexer
+	GRPCHost                 string       `env:"GRPC_HOST"`                   // Host of the gRPC server
+	GRPCPort                 string       `env:"GRPC_PORT"`                   // Port of the gRPC server
+	GRPCAddress              string       `env:"GRPC_ADDRESS"`                // Full gRPC address (host:port)
 	CollectAnnotations       bool         `env:"COLLECT_ANNOTATIONS"`         // Collect all annotations with values <=64 characters
 	CollectCRDPrinterColumns bool         `env:"COLLECT_CRD_PRINTER_COLUMNS"` // Enable collecting additional printer columns in the CRD
 	CollectStatusConditions  bool         `env:"COLLECT_STATUS_CONDITIONS"`   // Collect all status condition types and values if present
@@ -97,6 +103,21 @@ func InitConfig() {
 		setDefault(&Cfg.AggregatorURL, "", net.JoinHostPort(DEFAULT_AGGREGATOR_HOST, DEFAULT_AGGREGATOR_PORT))
 	} else { // Else use the default AggregatorURL
 		setDefault(&Cfg.AggregatorURL, "AGGREGATOR_URL", DEFAULT_AGGREGATOR_URL)
+	}
+
+	// gRPC configuration
+	setDefaultBool(&Cfg.EnableGRPC, "ENABLE_GRPC", true)
+	setDefault(&Cfg.GRPCHost, "GRPC_HOST", DEFAULT_GRPC_HOST)
+	setDefault(&Cfg.GRPCPort, "GRPC_PORT", DEFAULT_GRPC_PORT)
+	grpcHost, grpcHostPresent := os.LookupEnv("GRPC_HOST")
+	grpcPort, grpcPortPresent := os.LookupEnv("GRPC_PORT")
+
+	// If environment variables are set for gRPC host and port, use those to set the GRPCAddress
+	if grpcHostPresent && grpcPortPresent && grpcHost != "" && grpcPort != "" {
+		Cfg.GRPCAddress = net.JoinHostPort(grpcHost, grpcPort)
+		setDefault(&Cfg.GRPCAddress, "", net.JoinHostPort(DEFAULT_GRPC_HOST, DEFAULT_GRPC_PORT))
+	} else { // Else use the default GRPCAddress or environment variable
+		setDefault(&Cfg.GRPCAddress, "GRPC_ADDRESS", net.JoinHostPort(DEFAULT_GRPC_HOST, DEFAULT_GRPC_PORT))
 	}
 
 	setDefaultInt(&Cfg.HeartbeatMS, "HEARTBEAT_MS", DEFAULT_HEARTBEAT_MS)
@@ -202,6 +223,21 @@ func setDefaultInt(field *int, env string, defaultVal int) {
 		}
 	} else if *field == 0 && defaultVal != 0 {
 		klog.Infof("No %s from file or environment, using default value: %d", env, defaultVal)
+		*field = defaultVal
+	}
+}
+
+func setDefaultBool(field *bool, env string, defaultVal bool) {
+	if val := os.Getenv(env); val != "" {
+		klog.Infof("Using %s from environment: %s", env, val)
+		var err error
+		*field, err = strconv.ParseBool(val)
+		if err != nil {
+			klog.Error("Error parsing env [", env, "].  Expected a boolean.  Original error: ", err)
+			*field = defaultVal
+		}
+	} else {
+		klog.Infof("No %s from file or environment, using default value: %t", env, defaultVal)
 		*field = defaultVal
 	}
 }
