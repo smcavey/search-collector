@@ -9,6 +9,9 @@ service SearchIndexer {
   // Sync resources with the indexer
   rpc Sync(SyncRequest) returns (SyncResponse);
   
+  // Streaming sync for large requests - accepts chunked data
+  rpc StreamSync(stream SyncChunk) returns (SyncResponse);
+  
   // Health check
   rpc Health(HealthRequest) returns (HealthResponse);
 }
@@ -21,6 +24,22 @@ message SyncRequest {
   repeated DeleteResourceEvent delete_resources = 5;
   repeated Edge add_edges = 6;
   repeated Edge delete_edges = 7;
+}
+
+message SyncChunk {
+  // Session management
+  string session_id = 1;
+  string cluster_id = 2;
+  bool is_first_chunk = 3;
+  bool is_last_chunk = 4;
+  bool overwrite_state = 5;
+  
+  // Data in this chunk
+  repeated Resource add_resources = 6;
+  repeated Resource update_resources = 7;
+  repeated DeleteResourceEvent delete_resources = 8;
+  repeated Edge add_edges = 9;
+  repeated Edge delete_edges = 10;
 }
 
 message SyncResponse {

@@ -6,10 +6,11 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"os"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stolostron/search-collector/api/proto"
+	"github.com/stolostron/search-collector/pkg/config"
 	tr "github.com/stolostron/search-collector/pkg/transforms"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -29,27 +30,19 @@ func NewGRPCClient(aggregatorURL string, deployedInHub bool) (*GRPCClient, error
 	var creds credentials.TransportCredentials
 
 	if deployedInHub {
-		// Hub deployment: Use TLS certificates if available
-		_, err := os.Stat("./sslcert/tls.crt")
-		if err != nil {
-			klog.Warning("TLS certificates not found, using insecure connection for gRPC")
-			creds = insecure.NewCredentials()
-		} else {
-			cert, err := tls.LoadX509KeyPair("./sslcert/tls.crt", "./sslcert/tls.key")
-			if err != nil {
-				klog.Warningf("Failed to load TLS certificates, using insecure connection: %v", err)
-				creds = insecure.NewCredentials()
-			} else {
-				tlsConfig := &tls.Config{
-					Certificates: []tls.Certificate{cert},
-					MinVersion:   tls.VersionTLS12,
-				}
-				creds = credentials.NewTLS(tlsConfig)
-			}
+		// Hub deployment: Use TLS for secure communication with search-indexer
+		// For service-to-service communication, we trust the server's certificate
+		// but don't need to provide client certificates
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: true, // Skip certificate verification for service-to-service in same cluster
+			MinVersion:         tls.VersionTLS12,
 		}
+		creds = credentials.NewTLS(tlsConfig)
+		klog.V(2).Info("Using TLS connection for gRPC with InsecureSkipVerify=true")
 	} else {
 		// Klusterlet deployment: Use insecure for now (can be enhanced with proper cert handling)
 		creds = insecure.NewCredentials()
+		klog.V(2).Info("Using insecure gRPC connection for klusterlet deployment")
 	}
 
 	// Establish gRPC connection
@@ -81,7 +74,26 @@ func (c *GRPCClient) Close() error {
 }
 
 // Sync sends resources to the search indexer via gRPC
+// Automatically chooses between streaming and non-streaming based on payload size
 func (c *GRPCClient) Sync(ctx context.Context, clusterID string, payload CollectorPayload) (*SyncResponse, error) {
+	// Calculate total resources to determine if we should use streaming
+	totalResources := len(payload.AddResources) + len(payload.UpdatedResources) + len(payload.DeletedResources)
+	totalEdges := len(payload.AddEdges) + len(payload.DeleteEdges)
+	chunkSize := config.Cfg.GRPCChunkSize
+
+	// Use streaming if payload is large or if explicitly doing a full resync
+	if totalResources > chunkSize || totalEdges > chunkSize || payload.ClearAll {
+		klog.V(2).Infof("Using streaming gRPC for large payload: resources=%d, edges=%d, clearAll=%t", 
+			totalResources, totalEdges, payload.ClearAll)
+		return c.StreamSync(ctx, clusterID, payload)
+	}
+
+	// Use regular sync for smaller payloads
+	return c.syncRegular(ctx, clusterID, payload)
+}
+
+// syncRegular sends resources using the original non-streaming gRPC method
+func (c *GRPCClient) syncRegular(ctx context.Context, clusterID string, payload CollectorPayload) (*SyncResponse, error) {
 	// Convert collector payload to gRPC request
 	grpcRequest := &proto.SyncRequest{
 		ClusterId:       clusterID,
@@ -99,24 +111,49 @@ func (c *GRPCClient) Sync(ctx context.Context, clusterID string, payload Collect
 		return nil, fmt.Errorf("gRPC sync failed: %w", err)
 	}
 
-	// Convert gRPC response to collector response
-	response := &SyncResponse{
-		TotalAdded:        int(grpcResponse.GetTotalAdded()),
-		TotalUpdated:      int(grpcResponse.GetTotalUpdated()),
-		TotalDeleted:      int(grpcResponse.GetTotalDeleted()),
-		TotalResources:    int(grpcResponse.GetTotalResources()),
-		TotalEdgesAdded:   int(grpcResponse.GetTotalEdgesAdded()),
-		TotalEdgesDeleted: int(grpcResponse.GetTotalEdgesDeleted()),
-		TotalEdges:        int(grpcResponse.GetTotalEdges()),
-		Version:           grpcResponse.GetVersion(),
-		AddErrors:         convertSyncErrorsFromProto(grpcResponse.GetAddErrors()),
-		UpdateErrors:      convertSyncErrorsFromProto(grpcResponse.GetUpdateErrors()),
-		DeleteErrors:      convertSyncErrorsFromProto(grpcResponse.GetDeleteErrors()),
-		AddEdgeErrors:     convertSyncErrorsFromProto(grpcResponse.GetAddEdgeErrors()),
-		DeleteEdgeErrors:  convertSyncErrorsFromProto(grpcResponse.GetDeleteEdgeErrors()),
+	return convertSyncResponseFromProto(grpcResponse), nil
+}
+
+// StreamSync sends resources to the search indexer via streaming gRPC
+func (c *GRPCClient) StreamSync(ctx context.Context, clusterID string, payload CollectorPayload) (*SyncResponse, error) {
+	// Generate session ID
+	sessionID := uuid.New().String()
+	
+	// Create streaming client
+	stream, err := c.client.StreamSync(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stream: %w", err)
 	}
 
-	return response, nil
+	// Send chunks
+	chunkSize := config.Cfg.GRPCChunkSize
+	
+	// Process all data types into chunks
+	chunks := c.createChunks(sessionID, clusterID, payload, chunkSize)
+	
+	klog.V(2).Infof("Sending %d chunks for session %s", len(chunks), sessionID)
+	
+	// Send all chunks
+	for i, chunk := range chunks {
+		chunk.IsFirstChunk = (i == 0)
+		chunk.IsLastChunk = (i == len(chunks)-1)
+		
+		if err := stream.Send(chunk); err != nil {
+			return nil, fmt.Errorf("failed to send chunk %d: %w", i, err)
+		}
+		
+		klog.V(3).Infof("Sent chunk %d/%d for session %s", i+1, len(chunks), sessionID)
+	}
+
+	// Close and receive response
+	grpcResponse, err := stream.CloseAndRecv()
+	if err != nil {
+		return nil, fmt.Errorf("failed to close stream and receive response: %w", err)
+	}
+
+	klog.V(2).Infof("Completed streaming sync for session %s", sessionID)
+	
+	return convertSyncResponseFromProto(grpcResponse), nil
 }
 
 // Health performs a health check via gRPC
@@ -159,7 +196,119 @@ type SyncError struct {
 	Message     string
 }
 
+// createChunks splits the payload into multiple chunks for streaming
+func (c *GRPCClient) createChunks(sessionID, clusterID string, payload CollectorPayload, chunkSize int) []*proto.SyncChunk {
+	var chunks []*proto.SyncChunk
+	
+	// Convert all resources to proto format first
+	addResources := convertResourcesToProto(payload.AddResources)
+	updateResources := convertResourcesToProto(payload.UpdatedResources)
+	deleteResources := convertDeleteResourcesToProto(payload.DeletedResources)
+	addEdges := convertEdgesToProto(payload.AddEdges)
+	deleteEdges := convertEdgesToProto(payload.DeleteEdges)
+	
+	// Calculate total items and distribute across chunks
+	totalItems := len(addResources) + len(updateResources) + len(deleteResources) + len(addEdges) + len(deleteEdges)
+	
+	if totalItems == 0 {
+		// Create single empty chunk for heartbeat
+		chunks = append(chunks, &proto.SyncChunk{
+			SessionId:     sessionID,
+			ClusterId:     clusterID,
+			OverwriteState: payload.ClearAll,
+		})
+		return chunks
+	}
+	
+	// Create chunks by distributing resources evenly
+	currentChunk := &proto.SyncChunk{
+		SessionId:     sessionID,
+		ClusterId:     clusterID,
+		OverwriteState: payload.ClearAll,
+	}
+	currentSize := 0
+	
+	// Helper function to add current chunk and start new one
+	addChunk := func() {
+		if currentSize > 0 {
+			chunks = append(chunks, currentChunk)
+			currentChunk = &proto.SyncChunk{
+				SessionId:     sessionID,
+				ClusterId:     clusterID,
+				OverwriteState: payload.ClearAll,
+			}
+			currentSize = 0
+		}
+	}
+	
+	// Add resources in order: add, update, delete, addEdges, deleteEdges
+	for _, resource := range addResources {
+		if currentSize >= chunkSize {
+			addChunk()
+		}
+		currentChunk.AddResources = append(currentChunk.AddResources, resource)
+		currentSize++
+	}
+	
+	for _, resource := range updateResources {
+		if currentSize >= chunkSize {
+			addChunk()
+		}
+		currentChunk.UpdateResources = append(currentChunk.UpdateResources, resource)
+		currentSize++
+	}
+	
+	for _, resource := range deleteResources {
+		if currentSize >= chunkSize {
+			addChunk()
+		}
+		currentChunk.DeleteResources = append(currentChunk.DeleteResources, resource)
+		currentSize++
+	}
+	
+	for _, edge := range addEdges {
+		if currentSize >= chunkSize {
+			addChunk()
+		}
+		currentChunk.AddEdges = append(currentChunk.AddEdges, edge)
+		currentSize++
+	}
+	
+	for _, edge := range deleteEdges {
+		if currentSize >= chunkSize {
+			addChunk()
+		}
+		currentChunk.DeleteEdges = append(currentChunk.DeleteEdges, edge)
+		currentSize++
+	}
+	
+	// Add final chunk if it has content
+	if currentSize > 0 {
+		chunks = append(chunks, currentChunk)
+	}
+	
+	return chunks
+}
+
 // Helper functions to convert between collector types and protobuf types
+
+func convertSyncResponseFromProto(grpcResponse *proto.SyncResponse) *SyncResponse {
+	return &SyncResponse{
+		TotalAdded:        int(grpcResponse.GetTotalAdded()),
+		TotalUpdated:      int(grpcResponse.GetTotalUpdated()),
+		TotalDeleted:      int(grpcResponse.GetTotalDeleted()),
+		TotalResources:    int(grpcResponse.GetTotalResources()),
+		TotalEdgesAdded:   int(grpcResponse.GetTotalEdgesAdded()),
+		TotalEdgesDeleted: int(grpcResponse.GetTotalEdgesDeleted()),
+		TotalEdges:        int(grpcResponse.GetTotalEdges()),
+		Version:           grpcResponse.GetVersion(),
+		AddErrors:         convertSyncErrorsFromProto(grpcResponse.GetAddErrors()),
+		UpdateErrors:      convertSyncErrorsFromProto(grpcResponse.GetUpdateErrors()),
+		DeleteErrors:      convertSyncErrorsFromProto(grpcResponse.GetDeleteErrors()),
+		AddEdgeErrors:     convertSyncErrorsFromProto(grpcResponse.GetAddEdgeErrors()),
+		DeleteEdgeErrors:  convertSyncErrorsFromProto(grpcResponse.GetDeleteEdgeErrors()),
+	}
+}
 
 func convertResourcesToProto(nodes []tr.Node) []*proto.Resource {
 	resources := make([]*proto.Resource, len(nodes))

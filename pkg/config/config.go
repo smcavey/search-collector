@@ -14,9 +14,11 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/tkanos/gonfig"
 	"k8s.io/client-go/rest"
@@ -40,6 +42,7 @@ const (
 	DEFAULT_REPORT_RATE_MS     = 5000   // 5 seconds
 	DEFAULT_RETRY_JITTER_MS    = 5000   // 5 seconds
 	DEFAULT_RUNTIME_MODE       = "production"
+	DEFAULT_GRPC_CHUNK_SIZE    = 1000   // Max resources per gRPC chunk
 )
 
 // Configuration options for the search-collector.
@@ -53,6 +56,7 @@ type Config struct {
 	GRPCHost                 string       `env:"GRPC_HOST"`                   // Host of the gRPC server
 	GRPCPort                 string       `env:"GRPC_PORT"`                   // Port of the gRPC server
 	GRPCAddress              string       `env:"GRPC_ADDRESS"`                // Full gRPC address (host:port)
+	GRPCChunkSize            int          `env:"GRPC_CHUNK_SIZE"`             // Maximum resources per gRPC chunk for streaming
 	CollectAnnotations       bool         `env:"COLLECT_ANNOTATIONS"`         // Collect all annotations with values <=64 characters
 	CollectCRDPrinterColumns bool         `env:"COLLECT_CRD_PRINTER_COLUMNS"` // Enable collecting additional printer columns in the CRD
 	CollectStatusConditions  bool         `env:"COLLECT_STATUS_CONDITIONS"`   // Collect all status condition types and values if present
@@ -105,25 +109,11 @@ func InitConfig() {
 		setDefault(&Cfg.AggregatorURL, "AGGREGATOR_URL", DEFAULT_AGGREGATOR_URL)
 	}
 
-	// gRPC configuration
-	setDefaultBool(&Cfg.EnableGRPC, "ENABLE_GRPC", true)
-	setDefault(&Cfg.GRPCHost, "GRPC_HOST", DEFAULT_GRPC_HOST)
-	setDefault(&Cfg.GRPCPort, "GRPC_PORT", DEFAULT_GRPC_PORT)
-	grpcHost, grpcHostPresent := os.LookupEnv("GRPC_HOST")
-	grpcPort, grpcPortPresent := os.LookupEnv("GRPC_PORT")
-
-	// If environment variables are set for gRPC host and port, use those to set the GRPCAddress
-	if grpcHostPresent && grpcPortPresent && grpcHost != "" && grpcPort != "" {
-		Cfg.GRPCAddress = net.JoinHostPort(grpcHost, grpcPort)
-		setDefault(&Cfg.GRPCAddress, "", net.JoinHostPort(DEFAULT_GRPC_HOST, DEFAULT_GRPC_PORT))
-	} else { // Else use the default GRPCAddress or environment variable
-		setDefault(&Cfg.GRPCAddress, "GRPC_ADDRESS", net.JoinHostPort(DEFAULT_GRPC_HOST, DEFAULT_GRPC_PORT))
-	}
-
 	setDefaultInt(&Cfg.HeartbeatMS, "HEARTBEAT_MS", DEFAULT_HEARTBEAT_MS)
 	setDefaultInt(&Cfg.MaxBackoffMS, "MAX_BACKOFF_MS", DEFAULT_MAX_BACKOFF_MS)
 	setDefaultInt(&Cfg.ReportRateMS, "REPORT_RATE_MS", DEFAULT_REPORT_RATE_MS)
 	setDefaultInt(&Cfg.RetryJitterMS, "RETRY_JITTER_MS", DEFAULT_RETRY_JITTER_MS)
+	setDefaultInt(&Cfg.GRPCChunkSize, "GRPC_CHUNK_SIZE", DEFAULT_GRPC_CHUNK_SIZE)
 
 	defaultKubePath := filepath.Join(os.Getenv("HOME"), ".kube", "config")
 	if _, err := os.Stat(defaultKubePath); os.IsNotExist(err) {
@@ -196,6 +186,28 @@ func InitConfig() {
 		klog.Info("Running inside klusterlet. Aggregator URL: ", Cfg.AggregatorURL)
 	}
 
+	// gRPC configuration - must be after DEPLOYED_IN_HUB is set
+	setDefaultBool(&Cfg.EnableGRPC, "ENABLE_GRPC", true)
+	
+	// For hub deployment, derive gRPC address from aggregator URL if not explicitly set
+	if Cfg.DeployedInHub && os.Getenv("GRPC_ADDRESS") == "" {
+		// Parse the aggregator URL to extract host and use gRPC port
+		if Cfg.AggregatorURL != "" && Cfg.AggregatorURL != DEFAULT_AGGREGATOR_URL {
+			if parsedHost, err := parseURLHost(Cfg.AggregatorURL); err == nil {
+				defaultGRPCAddress := net.JoinHostPort(parsedHost, "3011")
+				Cfg.GRPCAddress = defaultGRPCAddress
+				klog.Infof("Derived gRPC address from aggregator URL: %s", defaultGRPCAddress)
+			} else {
+				setDefault(&Cfg.GRPCAddress, "GRPC_ADDRESS", net.JoinHostPort(DEFAULT_GRPC_HOST, DEFAULT_GRPC_PORT))
+			}
+		} else {
+			setDefault(&Cfg.GRPCAddress, "GRPC_ADDRESS", net.JoinHostPort(DEFAULT_GRPC_HOST, DEFAULT_GRPC_PORT))
+		}
+	} else {
+		// Use explicit GRPC_ADDRESS environment variable or defaults
+		setDefault(&Cfg.GRPCAddress, "GRPC_ADDRESS", net.JoinHostPort(DEFAULT_GRPC_HOST, DEFAULT_GRPC_PORT))
+	}
+
 	// setting configs for metrics server
 	setDefault(&Cfg.ServerAddress, "SERVER_ADDRESS", ":5010")
 	setDefaultInt(&Cfg.HTTPTimeout, "HTTP_TIMEOUT", 5*60*1000)
@@ -240,4 +252,30 @@ func setDefaultBool(field *bool, env string, defaultVal bool) {
 		klog.Infof("No %s from file or environment, using default value: %t", env, defaultVal)
 		*field = defaultVal
 	}
+}
+
+// parseURLHost extracts the host from a URL string, handling both URL format and host:port format
+func parseURLHost(urlStr string) (string, error) {
+	// If it looks like a URL (has ://), parse it properly
+	if strings.Contains(urlStr, "://") {
+		parsedURL, err := url.Parse(urlStr)
+		if err != nil {
+			return "", err
+		}
+		// Remove port if present in Host field, we want just the hostname
+		host, _, err := net.SplitHostPort(parsedURL.Host)
+		if err != nil {
+			// If SplitHostPort fails, it means there's no port, so use the whole host
+			return parsedURL.Host, nil
+		}
+		return host, nil
+	}
+	
+	// If it's just host:port format, extract the host
+	host, _, err := net.SplitHostPort(urlStr)
+	if err != nil {
+		// If SplitHostPort fails, assume it's just a hostname
+		return urlStr, nil
+	}
+	return host, nil
 }

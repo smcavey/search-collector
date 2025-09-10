@@ -4,7 +4,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v3.19.6
-// source: api/proto/search_indexer.proto
+// source: search_indexer.proto
 
 package proto
 
@@ -21,8 +21,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SearchIndexer_Sync_FullMethodName   = "/search.indexer.SearchIndexer/Sync"
-	SearchIndexer_Health_FullMethodName = "/search.indexer.SearchIndexer/Health"
+	SearchIndexer_Sync_FullMethodName       = "/search.indexer.SearchIndexer/Sync"
+	SearchIndexer_StreamSync_FullMethodName = "/search.indexer.SearchIndexer/StreamSync"
+	SearchIndexer_Health_FullMethodName     = "/search.indexer.SearchIndexer/Health"
 )
 
 // SearchIndexerClient is the client API for SearchIndexer service.
@@ -31,6 +32,8 @@ const (
 type SearchIndexerClient interface {
 	// Sync resources with the indexer
 	Sync(ctx context.Context, in *SyncRequest, opts ...grpc.CallOption) (*SyncResponse, error)
+	// Streaming sync for large requests - accepts chunked data
+	StreamSync(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[SyncChunk, SyncResponse], error)
 	// Health check
 	Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
 }
@@ -53,6 +56,19 @@ func (c *searchIndexerClient) Sync(ctx context.Context, in *SyncRequest, opts ..
 	return out, nil
 }
 
+func (c *searchIndexerClient) StreamSync(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[SyncChunk, SyncResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &SearchIndexer_ServiceDesc.Streams[0], SearchIndexer_StreamSync_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[SyncChunk, SyncResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SearchIndexer_StreamSyncClient = grpc.ClientStreamingClient[SyncChunk, SyncResponse]
+
 func (c *searchIndexerClient) Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HealthResponse)
@@ -69,6 +85,8 @@ func (c *searchIndexerClient) Health(ctx context.Context, in *HealthRequest, opt
 type SearchIndexerServer interface {
 	// Sync resources with the indexer
 	Sync(context.Context, *SyncRequest) (*SyncResponse, error)
+	// Streaming sync for large requests - accepts chunked data
+	StreamSync(grpc.ClientStreamingServer[SyncChunk, SyncResponse]) error
 	// Health check
 	Health(context.Context, *HealthRequest) (*HealthResponse, error)
 	mustEmbedUnimplementedSearchIndexerServer()
@@ -83,6 +101,9 @@ type UnimplementedSearchIndexerServer struct{}
 
 func (UnimplementedSearchIndexerServer) Sync(context.Context, *SyncRequest) (*SyncResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Sync not implemented")
+}
+func (UnimplementedSearchIndexerServer) StreamSync(grpc.ClientStreamingServer[SyncChunk, SyncResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method StreamSync not implemented")
 }
 func (UnimplementedSearchIndexerServer) Health(context.Context, *HealthRequest) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Health not implemented")
@@ -126,6 +147,13 @@ func _SearchIndexer_Sync_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SearchIndexer_StreamSync_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(SearchIndexerServer).StreamSync(&grpc.GenericServerStream[SyncChunk, SyncResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type SearchIndexer_StreamSyncServer = grpc.ClientStreamingServer[SyncChunk, SyncResponse]
+
 func _SearchIndexer_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(HealthRequest)
 	if err := dec(in); err != nil {
@@ -160,6 +188,12 @@ var SearchIndexer_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _SearchIndexer_Health_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
-	Metadata: "api/proto/search_indexer.proto",
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "StreamSync",
+			Handler:       _SearchIndexer_StreamSync_Handler,
+			ClientStreams: true,
+		},
+	},
+	Metadata: "search_indexer.proto",
 }

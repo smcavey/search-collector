@@ -4,7 +4,7 @@
 // versions:
 // 	protoc-gen-go v1.36.9
 // 	protoc        v3.19.6
-// source: api/proto/search_indexer.proto
+// source: search_indexer.proto
 
 package proto
 
@@ -38,7 +38,7 @@ type SyncRequest struct {
 
 func (x *SyncRequest) Reset() {
 	*x = SyncRequest{}
-	mi := &file_api_proto_search_indexer_proto_msgTypes[0]
+	mi := &file_search_indexer_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -50,7 +50,7 @@ func (x *SyncRequest) String() string {
 func (*SyncRequest) ProtoMessage() {}
 
 func (x *SyncRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_search_indexer_proto_msgTypes[0]
+	mi := &file_search_indexer_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -63,7 +63,7 @@ func (x *SyncRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncRequest.ProtoReflect.Descriptor instead.
 func (*SyncRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_search_indexer_proto_rawDescGZIP(), []int{0}
+	return file_search_indexer_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *SyncRequest) GetClusterId() string {
@@ -115,6 +115,124 @@ func (x *SyncRequest) GetDeleteEdges() []*Edge {
 	return nil
 }
 
+type SyncChunk struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Session management
+	SessionId      string `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	ClusterId      string `protobuf:"bytes,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	IsFirstChunk   bool   `protobuf:"varint,3,opt,name=is_first_chunk,json=isFirstChunk,proto3" json:"is_first_chunk,omitempty"`
+	IsLastChunk    bool   `protobuf:"varint,4,opt,name=is_last_chunk,json=isLastChunk,proto3" json:"is_last_chunk,omitempty"`
+	OverwriteState bool   `protobuf:"varint,5,opt,name=overwrite_state,json=overwriteState,proto3" json:"overwrite_state,omitempty"`
+	// Data in this chunk
+	AddResources    []*Resource            `protobuf:"bytes,6,rep,name=add_resources,json=addResources,proto3" json:"add_resources,omitempty"`
+	UpdateResources []*Resource            `protobuf:"bytes,7,rep,name=update_resources,json=updateResources,proto3" json:"update_resources,omitempty"`
+	DeleteResources []*DeleteResourceEvent `protobuf:"bytes,8,rep,name=delete_resources,json=deleteResources,proto3" json:"delete_resources,omitempty"`
+	AddEdges        []*Edge                `protobuf:"bytes,9,rep,name=add_edges,json=addEdges,proto3" json:"add_edges,omitempty"`
+	DeleteEdges     []*Edge                `protobuf:"bytes,10,rep,name=delete_edges,json=deleteEdges,proto3" json:"delete_edges,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SyncChunk) Reset() {
+	*x = SyncChunk{}
+	mi := &file_search_indexer_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncChunk) ProtoMessage() {}
+
+func (x *SyncChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_search_indexer_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncChunk.ProtoReflect.Descriptor instead.
+func (*SyncChunk) Descriptor() ([]byte, []int) {
+	return file_search_indexer_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *SyncChunk) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SyncChunk) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *SyncChunk) GetIsFirstChunk() bool {
+	if x != nil {
+		return x.IsFirstChunk
+	}
+	return false
+}
+
+func (x *SyncChunk) GetIsLastChunk() bool {
+	if x != nil {
+		return x.IsLastChunk
+	}
+	return false
+}
+
+func (x *SyncChunk) GetOverwriteState() bool {
+	if x != nil {
+		return x.OverwriteState
+	}
+	return false
+}
+
+func (x *SyncChunk) GetAddResources() []*Resource {
+	if x != nil {
+		return x.AddResources
+	}
+	return nil
+}
+
+func (x *SyncChunk) GetUpdateResources() []*Resource {
+	if x != nil {
+		return x.UpdateResources
+	}
+	return nil
+}
+
+func (x *SyncChunk) GetDeleteResources() []*DeleteResourceEvent {
+	if x != nil {
+		return x.DeleteResources
+	}
+	return nil
+}
+
+func (x *SyncChunk) GetAddEdges() []*Edge {
+	if x != nil {
+		return x.AddEdges
+	}
+	return nil
+}
+
+func (x *SyncChunk) GetDeleteEdges() []*Edge {
+	if x != nil {
+		return x.DeleteEdges
+	}
+	return nil
+}
+
 type SyncResponse struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	TotalAdded        int32                  `protobuf:"varint,1,opt,name=total_added,json=totalAdded,proto3" json:"total_added,omitempty"`
@@ -136,7 +254,7 @@ type SyncResponse struct {
 
 func (x *SyncResponse) Reset() {
 	*x = SyncResponse{}
-	mi := &file_api_proto_search_indexer_proto_msgTypes[1]
+	mi := &file_search_indexer_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -148,7 +266,7 @@ func (x *SyncResponse) String() string {
 func (*SyncResponse) ProtoMessage() {}
 
 func (x *SyncResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_search_indexer_proto_msgTypes[1]
+	mi := &file_search_indexer_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -161,7 +279,7 @@ func (x *SyncResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncResponse.ProtoReflect.Descriptor instead.
 func (*SyncResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_search_indexer_proto_rawDescGZIP(), []int{1}
+	return file_search_indexer_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *SyncResponse) GetTotalAdded() int32 {
@@ -267,7 +385,7 @@ type Resource struct {
 
 func (x *Resource) Reset() {
 	*x = Resource{}
-	mi := &file_api_proto_search_indexer_proto_msgTypes[2]
+	mi := &file_search_indexer_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -279,7 +397,7 @@ func (x *Resource) String() string {
 func (*Resource) ProtoMessage() {}
 
 func (x *Resource) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_search_indexer_proto_msgTypes[2]
+	mi := &file_search_indexer_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -292,7 +410,7 @@ func (x *Resource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Resource.ProtoReflect.Descriptor instead.
 func (*Resource) Descriptor() ([]byte, []int) {
-	return file_api_proto_search_indexer_proto_rawDescGZIP(), []int{2}
+	return file_search_indexer_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Resource) GetKind() string {
@@ -336,7 +454,7 @@ type Edge struct {
 
 func (x *Edge) Reset() {
 	*x = Edge{}
-	mi := &file_api_proto_search_indexer_proto_msgTypes[3]
+	mi := &file_search_indexer_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -348,7 +466,7 @@ func (x *Edge) String() string {
 func (*Edge) ProtoMessage() {}
 
 func (x *Edge) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_search_indexer_proto_msgTypes[3]
+	mi := &file_search_indexer_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -361,7 +479,7 @@ func (x *Edge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Edge.ProtoReflect.Descriptor instead.
 func (*Edge) Descriptor() ([]byte, []int) {
-	return file_api_proto_search_indexer_proto_rawDescGZIP(), []int{3}
+	return file_search_indexer_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Edge) GetSourceUid() string {
@@ -408,7 +526,7 @@ type DeleteResourceEvent struct {
 
 func (x *DeleteResourceEvent) Reset() {
 	*x = DeleteResourceEvent{}
-	mi := &file_api_proto_search_indexer_proto_msgTypes[4]
+	mi := &file_search_indexer_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -420,7 +538,7 @@ func (x *DeleteResourceEvent) String() string {
 func (*DeleteResourceEvent) ProtoMessage() {}
 
 func (x *DeleteResourceEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_search_indexer_proto_msgTypes[4]
+	mi := &file_search_indexer_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -433,7 +551,7 @@ func (x *DeleteResourceEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteResourceEvent.ProtoReflect.Descriptor instead.
 func (*DeleteResourceEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_search_indexer_proto_rawDescGZIP(), []int{4}
+	return file_search_indexer_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *DeleteResourceEvent) GetUid() string {
@@ -453,7 +571,7 @@ type SyncError struct {
 
 func (x *SyncError) Reset() {
 	*x = SyncError{}
-	mi := &file_api_proto_search_indexer_proto_msgTypes[5]
+	mi := &file_search_indexer_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -465,7 +583,7 @@ func (x *SyncError) String() string {
 func (*SyncError) ProtoMessage() {}
 
 func (x *SyncError) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_search_indexer_proto_msgTypes[5]
+	mi := &file_search_indexer_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -478,7 +596,7 @@ func (x *SyncError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncError.ProtoReflect.Descriptor instead.
 func (*SyncError) Descriptor() ([]byte, []int) {
-	return file_api_proto_search_indexer_proto_rawDescGZIP(), []int{5}
+	return file_search_indexer_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SyncError) GetResourceUid() string {
@@ -503,7 +621,7 @@ type HealthRequest struct {
 
 func (x *HealthRequest) Reset() {
 	*x = HealthRequest{}
-	mi := &file_api_proto_search_indexer_proto_msgTypes[6]
+	mi := &file_search_indexer_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -515,7 +633,7 @@ func (x *HealthRequest) String() string {
 func (*HealthRequest) ProtoMessage() {}
 
 func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_search_indexer_proto_msgTypes[6]
+	mi := &file_search_indexer_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -528,7 +646,7 @@ func (x *HealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
 func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_search_indexer_proto_rawDescGZIP(), []int{6}
+	return file_search_indexer_proto_rawDescGZIP(), []int{7}
 }
 
 type HealthResponse struct {
@@ -540,7 +658,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_api_proto_search_indexer_proto_msgTypes[7]
+	mi := &file_search_indexer_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -552,7 +670,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_search_indexer_proto_msgTypes[7]
+	mi := &file_search_indexer_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -565,7 +683,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_search_indexer_proto_rawDescGZIP(), []int{7}
+	return file_search_indexer_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *HealthResponse) GetStatus() string {
@@ -575,11 +693,11 @@ func (x *HealthResponse) GetStatus() string {
 	return ""
 }
 
-var File_api_proto_search_indexer_proto protoreflect.FileDescriptor
+var File_search_indexer_proto protoreflect.FileDescriptor
 
-const file_api_proto_search_indexer_proto_rawDesc = "" +
+const file_search_indexer_proto_rawDesc = "" +
 	"\n" +
-	"\x1eapi/proto/search_indexer.proto\x12\x0esearch.indexer\"\x95\x03\n" +
+	"\x14search_indexer.proto\x12\x0esearch.indexer\"\x95\x03\n" +
 	"\vSyncRequest\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12'\n" +
@@ -588,7 +706,21 @@ const file_api_proto_search_indexer_proto_rawDesc = "" +
 	"\x10update_resources\x18\x04 \x03(\v2\x18.search.indexer.ResourceR\x0fupdateResources\x12N\n" +
 	"\x10delete_resources\x18\x05 \x03(\v2#.search.indexer.DeleteResourceEventR\x0fdeleteResources\x121\n" +
 	"\tadd_edges\x18\x06 \x03(\v2\x14.search.indexer.EdgeR\baddEdges\x127\n" +
-	"\fdelete_edges\x18\a \x03(\v2\x14.search.indexer.EdgeR\vdeleteEdges\"\xff\x04\n" +
+	"\fdelete_edges\x18\a \x03(\v2\x14.search.indexer.EdgeR\vdeleteEdges\"\xfc\x03\n" +
+	"\tSyncChunk\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x02 \x01(\tR\tclusterId\x12$\n" +
+	"\x0eis_first_chunk\x18\x03 \x01(\bR\fisFirstChunk\x12\"\n" +
+	"\ris_last_chunk\x18\x04 \x01(\bR\visLastChunk\x12'\n" +
+	"\x0foverwrite_state\x18\x05 \x01(\bR\x0eoverwriteState\x12=\n" +
+	"\radd_resources\x18\x06 \x03(\v2\x18.search.indexer.ResourceR\faddResources\x12C\n" +
+	"\x10update_resources\x18\a \x03(\v2\x18.search.indexer.ResourceR\x0fupdateResources\x12N\n" +
+	"\x10delete_resources\x18\b \x03(\v2#.search.indexer.DeleteResourceEventR\x0fdeleteResources\x121\n" +
+	"\tadd_edges\x18\t \x03(\v2\x14.search.indexer.EdgeR\baddEdges\x127\n" +
+	"\fdelete_edges\x18\n" +
+	" \x03(\v2\x14.search.indexer.EdgeR\vdeleteEdges\"\xff\x04\n" +
 	"\fSyncResponse\x12\x1f\n" +
 	"\vtotal_added\x18\x01 \x01(\x05R\n" +
 	"totalAdded\x12#\n" +
@@ -632,78 +764,88 @@ const file_api_proto_search_indexer_proto_rawDesc = "" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"\x0f\n" +
 	"\rHealthRequest\"(\n" +
 	"\x0eHealthResponse\x12\x16\n" +
-	"\x06status\x18\x01 \x01(\tR\x06status2\x9b\x01\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status2\xe4\x01\n" +
 	"\rSearchIndexer\x12A\n" +
 	"\x04Sync\x12\x1b.search.indexer.SyncRequest\x1a\x1c.search.indexer.SyncResponse\x12G\n" +
+	"\n" +
+	"StreamSync\x12\x19.search.indexer.SyncChunk\x1a\x1c.search.indexer.SyncResponse(\x01\x12G\n" +
 	"\x06Health\x12\x1d.search.indexer.HealthRequest\x1a\x1e.search.indexer.HealthResponseB7Z5github.com/stolostron/search-collector/pkg/grpc/protob\x06proto3"
 
 var (
-	file_api_proto_search_indexer_proto_rawDescOnce sync.Once
-	file_api_proto_search_indexer_proto_rawDescData []byte
+	file_search_indexer_proto_rawDescOnce sync.Once
+	file_search_indexer_proto_rawDescData []byte
 )
 
-func file_api_proto_search_indexer_proto_rawDescGZIP() []byte {
-	file_api_proto_search_indexer_proto_rawDescOnce.Do(func() {
-		file_api_proto_search_indexer_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_api_proto_search_indexer_proto_rawDesc), len(file_api_proto_search_indexer_proto_rawDesc)))
+func file_search_indexer_proto_rawDescGZIP() []byte {
+	file_search_indexer_proto_rawDescOnce.Do(func() {
+		file_search_indexer_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_search_indexer_proto_rawDesc), len(file_search_indexer_proto_rawDesc)))
 	})
-	return file_api_proto_search_indexer_proto_rawDescData
+	return file_search_indexer_proto_rawDescData
 }
 
-var file_api_proto_search_indexer_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
-var file_api_proto_search_indexer_proto_goTypes = []any{
+var file_search_indexer_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_search_indexer_proto_goTypes = []any{
 	(*SyncRequest)(nil),         // 0: search.indexer.SyncRequest
-	(*SyncResponse)(nil),        // 1: search.indexer.SyncResponse
-	(*Resource)(nil),            // 2: search.indexer.Resource
-	(*Edge)(nil),                // 3: search.indexer.Edge
-	(*DeleteResourceEvent)(nil), // 4: search.indexer.DeleteResourceEvent
-	(*SyncError)(nil),           // 5: search.indexer.SyncError
-	(*HealthRequest)(nil),       // 6: search.indexer.HealthRequest
-	(*HealthResponse)(nil),      // 7: search.indexer.HealthResponse
-	nil,                         // 8: search.indexer.Resource.PropertiesEntry
+	(*SyncChunk)(nil),           // 1: search.indexer.SyncChunk
+	(*SyncResponse)(nil),        // 2: search.indexer.SyncResponse
+	(*Resource)(nil),            // 3: search.indexer.Resource
+	(*Edge)(nil),                // 4: search.indexer.Edge
+	(*DeleteResourceEvent)(nil), // 5: search.indexer.DeleteResourceEvent
+	(*SyncError)(nil),           // 6: search.indexer.SyncError
+	(*HealthRequest)(nil),       // 7: search.indexer.HealthRequest
+	(*HealthResponse)(nil),      // 8: search.indexer.HealthResponse
+	nil,                         // 9: search.indexer.Resource.PropertiesEntry
 }
-var file_api_proto_search_indexer_proto_depIdxs = []int32{
-	2,  // 0: search.indexer.SyncRequest.add_resources:type_name -> search.indexer.Resource
-	2,  // 1: search.indexer.SyncRequest.update_resources:type_name -> search.indexer.Resource
-	4,  // 2: search.indexer.SyncRequest.delete_resources:type_name -> search.indexer.DeleteResourceEvent
-	3,  // 3: search.indexer.SyncRequest.add_edges:type_name -> search.indexer.Edge
-	3,  // 4: search.indexer.SyncRequest.delete_edges:type_name -> search.indexer.Edge
-	5,  // 5: search.indexer.SyncResponse.add_errors:type_name -> search.indexer.SyncError
-	5,  // 6: search.indexer.SyncResponse.update_errors:type_name -> search.indexer.SyncError
-	5,  // 7: search.indexer.SyncResponse.delete_errors:type_name -> search.indexer.SyncError
-	5,  // 8: search.indexer.SyncResponse.add_edge_errors:type_name -> search.indexer.SyncError
-	5,  // 9: search.indexer.SyncResponse.delete_edge_errors:type_name -> search.indexer.SyncError
-	8,  // 10: search.indexer.Resource.properties:type_name -> search.indexer.Resource.PropertiesEntry
-	0,  // 11: search.indexer.SearchIndexer.Sync:input_type -> search.indexer.SyncRequest
-	6,  // 12: search.indexer.SearchIndexer.Health:input_type -> search.indexer.HealthRequest
-	1,  // 13: search.indexer.SearchIndexer.Sync:output_type -> search.indexer.SyncResponse
-	7,  // 14: search.indexer.SearchIndexer.Health:output_type -> search.indexer.HealthResponse
-	13, // [13:15] is the sub-list for method output_type
-	11, // [11:13] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+var file_search_indexer_proto_depIdxs = []int32{
+	3,  // 0: search.indexer.SyncRequest.add_resources:type_name -> search.indexer.Resource
+	3,  // 1: search.indexer.SyncRequest.update_resources:type_name -> search.indexer.Resource
+	5,  // 2: search.indexer.SyncRequest.delete_resources:type_name -> search.indexer.DeleteResourceEvent
+	4,  // 3: search.indexer.SyncRequest.add_edges:type_name -> search.indexer.Edge
+	4,  // 4: search.indexer.SyncRequest.delete_edges:type_name -> search.indexer.Edge
+	3,  // 5: search.indexer.SyncChunk.add_resources:type_name -> search.indexer.Resource
+	3,  // 6: search.indexer.SyncChunk.update_resources:type_name -> search.indexer.Resource
+	5,  // 7: search.indexer.SyncChunk.delete_resources:type_name -> search.indexer.DeleteResourceEvent
+	4,  // 8: search.indexer.SyncChunk.add_edges:type_name -> search.indexer.Edge
+	4,  // 9: search.indexer.SyncChunk.delete_edges:type_name -> search.indexer.Edge
+	6,  // 10: search.indexer.SyncResponse.add_errors:type_name -> search.indexer.SyncError
+	6,  // 11: search.indexer.SyncResponse.update_errors:type_name -> search.indexer.SyncError
+	6,  // 12: search.indexer.SyncResponse.delete_errors:type_name -> search.indexer.SyncError
+	6,  // 13: search.indexer.SyncResponse.add_edge_errors:type_name -> search.indexer.SyncError
+	6,  // 14: search.indexer.SyncResponse.delete_edge_errors:type_name -> search.indexer.SyncError
+	9,  // 15: search.indexer.Resource.properties:type_name -> search.indexer.Resource.PropertiesEntry
+	0,  // 16: search.indexer.SearchIndexer.Sync:input_type -> search.indexer.SyncRequest
+	1,  // 17: search.indexer.SearchIndexer.StreamSync:input_type -> search.indexer.SyncChunk
+	7,  // 18: search.indexer.SearchIndexer.Health:input_type -> search.indexer.HealthRequest
+	2,  // 19: search.indexer.SearchIndexer.Sync:output_type -> search.indexer.SyncResponse
+	2,  // 20: search.indexer.SearchIndexer.StreamSync:output_type -> search.indexer.SyncResponse
+	8,  // 21: search.indexer.SearchIndexer.Health:output_type -> search.indexer.HealthResponse
+	19, // [19:22] is the sub-list for method output_type
+	16, // [16:19] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
-func init() { file_api_proto_search_indexer_proto_init() }
-func file_api_proto_search_indexer_proto_init() {
-	if File_api_proto_search_indexer_proto != nil {
+func init() { file_search_indexer_proto_init() }
+func file_search_indexer_proto_init() {
+	if File_search_indexer_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_search_indexer_proto_rawDesc), len(file_api_proto_search_indexer_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_search_indexer_proto_rawDesc), len(file_search_indexer_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_api_proto_search_indexer_proto_goTypes,
-		DependencyIndexes: file_api_proto_search_indexer_proto_depIdxs,
-		MessageInfos:      file_api_proto_search_indexer_proto_msgTypes,
+		GoTypes:           file_search_indexer_proto_goTypes,
+		DependencyIndexes: file_search_indexer_proto_depIdxs,
+		MessageInfos:      file_search_indexer_proto_msgTypes,
 	}.Build()
-	File_api_proto_search_indexer_proto = out.File
-	file_api_proto_search_indexer_proto_goTypes = nil
-	file_api_proto_search_indexer_proto_depIdxs = nil
+	File_search_indexer_proto = out.File
+	file_search_indexer_proto_goTypes = nil
+	file_search_indexer_proto_depIdxs = nil
 }
