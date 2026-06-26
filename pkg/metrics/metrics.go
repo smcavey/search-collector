@@ -27,4 +27,10 @@ var (
 		Name: "search_collector_sync_requests_total",
 		Help: "Total number of HTTP requests sent",
 	}, []string{"status_code", "sync_type"})
+
+	// SecurityFindingsTotal counts security findings detected by the scanner
+	SecurityFindingsTotal = promauto.With(PromRegistry).NewCounterVec(prometheus.CounterOpts{
+		Name: "search_collector_security_findings_total",
+		Help: "Security findings detected by the collector scanner",
+	}, []string{"check", "severity", "resource_kind", "resource_name", "resource_namespace"})
 )

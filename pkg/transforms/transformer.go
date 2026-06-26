@@ -16,6 +16,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/stolostron/search-collector/pkg/metrics"
+	"github.com/stolostron/search-collector/pkg/security"
+
 	ocpapp "github.com/openshift/api/apps/v1"
 	policy "github.com/stolostron/governance-policy-propagator/api/v1"
 	klusterletaddon "github.com/stolostron/klusterlet-addon-controller/pkg/apis/agent/v1"
@@ -154,7 +157,15 @@ type Transformer struct {
 var (
 	NonNSResourceMap map[string]struct{} // store non-namespaced resources in this map
 	NonNSResMapMutex = sync.RWMutex{}
+
+	// SecurityScanner is the optional security scanner. Set via SetSecurityScanner.
+	securityScanner *security.Scanner
 )
+
+// SetSecurityScanner sets the scanner used by transform routines.
+func SetSecurityScanner(s *security.Scanner) {
+	securityScanner = s
+}
 
 func NewTransformer(inputChan chan *Event, outputChan chan NodeEvent, numRoutines int) Transformer {
 	klog.Info("Transformer started")
@@ -442,6 +453,17 @@ func TransformRoutine(input chan *Event, output chan NodeEvent) {
 				trans = GkConstraintResourceBuilder(event.Resource, event.AdditionalPrinterColumns...)
 			} else {
 				trans = GenericResourceBuilder(event.Resource, event.AdditionalPrinterColumns...)
+			}
+		}
+
+		// Run security scanner if configured.
+		if securityScanner != nil && event.Operation != Delete {
+			for _, finding := range securityScanner.Scan(event.Resource) {
+				metrics.SecurityFindingsTotal.WithLabelValues(
+						finding.Check, finding.Severity, finding.Kind, finding.Name, finding.Namespace,
+					).Inc()
+				klog.Infof("[SECURITY] %s: %s %s/%s in namespace %s",
+					finding.Severity, finding.Check, finding.Kind, finding.Name, finding.Namespace)
 			}
 		}
 

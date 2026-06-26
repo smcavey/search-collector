@@ -1,0 +1,106 @@
+# Sample ConfigMap for the search-collector security scanner.
+# Deploy this ConfigMap in the same namespace as the search-collector to enable
+# AI-focused security scanning. The scanner polls for changes every 30 seconds.
+#
+# Supported operators:
+#   equals, notEquals, contains, notContains, regex, valueMatchesRegex,
+#   keyMatchesRegex, valueLengthGreaterThan, in, exists, notExists, greaterThan
+#
+# Path syntax:
+#   Dot-separated keys with [*] for array wildcards.
+#   Examples: .metadata.annotations, .spec.containers[*].image, .data
+#
+# Rule logic:
+#   - Multiple paths within a rule: OR (any match fires)
+#   - Multiple rules within a check: AND (all must match)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: search-security-config
+  # namespace: <search-collector namespace>
+data:
+  config.yaml: |
+    enabled: true
+    checks:
+      # --- Prompt Injection ---
+      - name: prompt-injection
+        severity: high
+        description: "Potential prompt injection detected in resource data"
+        match:
+          kinds: ["*"]
+          apiGroups: ["*"]
+        rules:
+          - paths:
+              - .metadata.annotations
+              - .metadata.labels
+              - .data
+            operator: valueMatchesRegex
+            value: "(?i)(ignore\\s+(previous|above|all)\\s+instructions|you\\s+are\\s+now|act\\s+as\\s+(if|a)|system\\s*prompt|\\bdo\\s+not\\s+follow)"
+
+      # --- Jailbreak Patterns ---
+      - name: jailbreak-pattern
+        severity: high
+        description: "LLM jailbreak pattern detected in resource data"
+        match:
+          kinds: ["*"]
+          apiGroups: ["*"]
+        rules:
+          - paths:
+              - .metadata.annotations
+              - .data
+            operator: valueMatchesRegex
+            value: "(?i)(DAN\\s*mode|developer\\s*mode\\s*enabled|jailbreak|bypass\\s*(safety|filter|guard)|uncensored\\s*mode)"
+
+      # --- Control Character Injection ---
+      - name: control-char-injection
+        severity: medium
+        description: "Suspicious control characters detected in resource data"
+        match:
+          kinds: ["*"]
+          apiGroups: ["*"]
+        rules:
+          - paths:
+              - .metadata.annotations
+              - .data
+            operator: valueMatchesRegex
+            value: "[\\x00-\\x08\\x0e-\\x1f]"
+
+      # --- Context Stuffing ---
+      - name: context-stuffing
+        severity: medium
+        description: "Unusually large value detected that may be context stuffing"
+        match:
+          kinds: ["*"]
+          apiGroups: ["*"]
+        rules:
+          - paths:
+              - .data
+            operator: valueLengthGreaterThan
+            value: 10000
+
+      # --- Exfiltration URLs ---
+      - name: exfiltration-url
+        severity: high
+        description: "External URL detected in resource data that could exfiltrate data"
+        match:
+          kinds: ["ConfigMap", "Secret"]
+          apiGroups: [""]
+        rules:
+          - paths:
+              - .data
+            operator: valueMatchesRegex
+            value: "https?://[a-zA-Z0-9.-]+\\.[a-z]{2,}"
+
+      # --- Unpinned Container Images ---
+#      - name: unpinned-image
+#        severity: low
+#        description: "Container image not pinned by digest"
+#        match:
+#          kinds: ["Pod"]
+#          apiGroups: [""]
+#        rules:
+#          - paths:
+#              - ".spec.containers[*].image"
+#              - ".spec.initContainers[*].image"
+#            operator: notContains
+#            value: "@sha256:"

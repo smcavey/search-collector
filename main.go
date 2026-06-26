@@ -16,6 +16,7 @@ import (
 	"github.com/stolostron/search-collector/pkg/informer"
 	lease "github.com/stolostron/search-collector/pkg/lease"
 	rec "github.com/stolostron/search-collector/pkg/reconciler"
+	"github.com/stolostron/search-collector/pkg/security"
 	"github.com/stolostron/search-collector/pkg/server"
 	tr "github.com/stolostron/search-collector/pkg/transforms"
 	"k8s.io/klog/v2"
@@ -84,6 +85,11 @@ func main() {
 
 	// Merge configurable collection config with existing config FUTURE: ACM-21892 combine and merge with search-collector-config configmap
 	tr.LoadAndMergeConfigurableCollection()
+
+	// Start security scanner if ConfigMap is present.
+	secConfigLoader := security.NewConfigLoader(config.GetKubeClient(config.GetKubeConfig()), config.Cfg.PodNamespace)
+	secConfigLoader.Start()
+	tr.SetSecurityScanner(security.NewScanner(secConfigLoader))
 
 	// Create input channel
 	transformChannel := make(chan *tr.Event)
