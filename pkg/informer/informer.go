@@ -105,7 +105,9 @@ func (inform *GenericInformer) listAndResync() error {
 			return listError
 		}
 
-		// Add all resources filtered by namespace
+		// Add all resources filtered by namespace.
+		// Excluded resource types never reach this point — they are filtered out in
+		// SupportedResources() at discovery time so no informer is created for them.
 		for i := range resources.Items {
 			if !nsFilterCache.isNamespaceAllowed(resources.Items[i].GetNamespace()) {
 				continue
