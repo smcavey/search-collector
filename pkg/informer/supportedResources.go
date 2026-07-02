@@ -151,9 +151,11 @@ func SupportedResources(discoveryClient discovery.DiscoveryClient) (map[schema.G
 			// Skip resources excluded via CollectorConfig exclude rules.
 			// Normalize the group to empty string for core-group resources ("v1" → "")
 			// to match the CollectorConfig apiGroups convention.
-			apiGroup := group
-			if len(groupVersion) == 1 {
-				apiGroup = ""
+			apiGroup := ""
+			version := groupVersion[0]
+			if len(groupVersion) > 1 {
+				apiGroup = groupVersion[0]
+				version = groupVersion[1]
 			}
 			if tr.IsResourceExcluded(apiGroup, apiResource.Kind) {
 				klog.V(3).Infof("Skipping excluded resource [group: '%s' kind: %s]."+
@@ -169,16 +171,6 @@ func SupportedResources(discoveryClient discovery.DiscoveryClient) (map[schema.G
 				}
 				tr.NonNSResMapMutex.Unlock()
 
-			}
-
-			// Derive the actual API group and version.
-			// strings.Split on "apps/v1" gives ["apps","v1"]; on "v1" gives ["v1"].
-			// Core resources (no slash) have group="" and version=groupVersion[0].
-			apiGroup := ""
-			version := groupVersion[0]
-			if len(groupVersion) > 1 {
-				apiGroup = groupVersion[0]
-				version = groupVersion[1]
 			}
 
 			if !slices.Contains(apiResource.Verbs, "watch") {

@@ -48,9 +48,8 @@ type excludeRule struct {
 // matching rule (false = include, true = exclude). An empty list means no resources
 // are excluded.
 //
-// Thread safety: written once at startup, then read concurrently by informer goroutines.
-// Safe for now because reads only begin after LoadAndMergeConfigurableCollection returns.
-// When ACM-20047 adds dynamic reload, this will need a sync.RWMutex.
+// Protected by configMu — readers use RLock, writers build a new slice locally then
+// swap under Lock (alongside mergedTransformConfig).
 var excludeRules []excludeRule
 
 // LoadAndMergeConfigurableCollection loads the CollectorConfig resource from the cluster and merges it with defaultTransformConfig.
@@ -61,8 +60,8 @@ func LoadAndMergeConfigurableCollection() {
 		// Initialize mergedTransformConfig to a copy of defaultTransformConfig
 		configMu.Lock()
 		mergedTransformConfig = deepCopyTransformConfig(defaultTransformConfig)
-		configMu.Unlock()
 		excludeRules = nil
+		configMu.Unlock()
 		return
 	}
 
@@ -93,7 +92,7 @@ var collectorConfigGVR = schema.GroupVersionResource{
 func loadAndMergeConfigurableCollectionWithClient(dynamicClient dynamic.Interface) {
 	// Build the new config into a local variable — no lock needed during the build phase.
 	newConfig := deepCopyTransformConfig(defaultTransformConfig)
-	excludeRules = nil
+	var newExcludeRules []excludeRule
 
 	namespace := config.Cfg.PodNamespace
 
@@ -106,6 +105,7 @@ func loadAndMergeConfigurableCollectionWithClient(dynamicClient dynamic.Interfac
 		klog.Infof("Could not load merged-collector-config resource: %v. Using default config only", err)
 		configMu.Lock()
 		mergedTransformConfig = newConfig
+		excludeRules = nil
 		configMu.Unlock()
 		return
 	}
@@ -118,6 +118,7 @@ func loadAndMergeConfigurableCollectionWithClient(dynamicClient dynamic.Interfac
 		updateCollectorConfigStatus(dynamicClient, namespace, configObj, []string{msg}, collectorConfigReasonLoadError)
 		configMu.Lock()
 		mergedTransformConfig = newConfig
+		excludeRules = nil
 		configMu.Unlock()
 		return
 	}
@@ -132,6 +133,7 @@ func loadAndMergeConfigurableCollectionWithClient(dynamicClient dynamic.Interfac
 		updateCollectorConfigStatus(dynamicClient, namespace, configObj, nil, collectorConfigReasonApplied)
 		configMu.Lock()
 		mergedTransformConfig = newConfig
+		excludeRules = nil
 		configMu.Unlock()
 		return
 	}
@@ -146,7 +148,7 @@ func loadAndMergeConfigurableCollectionWithClient(dynamicClient dynamic.Interfac
 		fieldSuffix := rule.FieldSuffix
 
 		if rule.Action == v1alpha1.ActionExclude {
-			appendExcludeRule(rule.ResourceSelector.APIGroups, rule.ResourceSelector.Kinds, v1alpha1.ActionExclude)
+			appendExcludeRule(&newExcludeRules, rule.ResourceSelector.APIGroups, rule.ResourceSelector.Kinds, v1alpha1.ActionExclude)
 			continue
 		}
 
@@ -164,11 +166,11 @@ func loadAndMergeConfigurableCollectionWithClient(dynamicClient dynamic.Interfac
 			continue
 		}
 
-		// "Last entry wins": a valid include rule appends an ActionInclude entry to excludeRules,
+		// "Last entry wins": a valid include rule appends an ActionInclude entry to newExcludeRules,
 		// which cancels any prior exclude for the same resource during IsResourceExcluded evaluation.
 		// This correctly handles wildcard-vs-specific (e.g. exclude "*.*" followed by
 		// include "Deployment.apps" → Deployments are NOT excluded).
-		appendExcludeRule(rule.ResourceSelector.APIGroups, rule.ResourceSelector.Kinds, v1alpha1.ActionInclude)
+		appendExcludeRule(&newExcludeRules, rule.ResourceSelector.APIGroups, rule.ResourceSelector.Kinds, v1alpha1.ActionInclude)
 
 		apiGroups := rule.ResourceSelector.APIGroups
 		kinds := rule.ResourceSelector.Kinds
@@ -305,6 +307,7 @@ func loadAndMergeConfigurableCollectionWithClient(dynamicClient dynamic.Interfac
 	// Atomic swap — take write lock only for the pointer assignment.
 	configMu.Lock()
 	mergedTransformConfig = newConfig
+	excludeRules = newExcludeRules
 	configMu.Unlock()
 
 	// Determine final condition reason based on whether any rules were skipped.
@@ -397,15 +400,15 @@ func updateCollectorConfigStatus(dynamicClient dynamic.Interface, namespace stri
 	klog.V(2).Infof("Updated CollectorConfig status: Applied=%s reason=%s", conditionStatus, reason)
 }
 
-// appendExcludeRule appends an exclude or include-override rule to the ordered rule list.
+// appendExcludeRule appends an exclude or include-override rule to the target slice.
 // The rule matches any combination of (apiGroup, kind) from the cartesian product of
 // apiGroups × kinds, using "*" as a wildcard for either dimension. This is consistent
 // with the matching logic in pkg/informer/supportedResources.go (isResourceMatchingList).
-func appendExcludeRule(apiGroups, kinds []string, action v1alpha1.ActionType) {
+func appendExcludeRule(target *[]excludeRule, apiGroups, kinds []string, action v1alpha1.ActionType) {
 	if len(apiGroups) == 0 || len(kinds) == 0 {
 		return
 	}
-	excludeRules = append(excludeRules, excludeRule{
+	*target = append(*target, excludeRule{
 		apiGroups: apiGroups,
 		kinds:     kinds,
 		action:    action,
@@ -437,6 +440,8 @@ func matchesExcludeRule(group, kind string, apiGroups, kinds []string) bool {
 // include "Deployment.apps" results in Deployments being collected (not excluded).
 func IsResourceExcluded(group, kind string) bool {
 	excluded := false
+	configMu.RLock()
+	defer configMu.RUnlock()
 	for _, rule := range excludeRules {
 		if matchesExcludeRule(group, kind, rule.apiGroups, rule.kinds) {
 			excluded = rule.action == v1alpha1.ActionExclude

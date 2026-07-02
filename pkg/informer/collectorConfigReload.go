@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 
+	tr "github.com/stolostron/search-collector/pkg/transforms"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/klog/v2"
@@ -18,12 +19,26 @@ var CollectorConfigGVR = schema.GroupVersionResource{
 
 // ConfigReloadHandler intercepts GenericInformer events for CollectorConfig resources.
 // When the merged-collector-config CR is added, updated (spec change), or deleted,
-// it reloads the transform config and triggers targeted informer resyncs.
-// It wraps the normal indexing handlers so both indexing and config reload happen on the same event.
+// it reloads the transform config and triggers targeted informer resyncs or a full
+// syncInformers pass (when exclude rules change).
 type ConfigReloadHandler struct {
 	LastSeenGeneration int64
-	// ReloadFn reloads config from the cluster and returns the list of changed config keys.
-	ReloadFn func() []string
+	// ReloadFn reloads config from the cluster and returns a ReloadResult describing
+	// what changed. Returns nil if nothing changed.
+	ReloadFn func() *tr.ReloadResult
+}
+
+// handleReloadResult processes a ReloadResult by triggering the appropriate signals.
+func handleReloadResult(result *tr.ReloadResult) {
+	if result == nil {
+		return
+	}
+	if result.ExcludeRulesChanged {
+		TriggerSyncInformers()
+	}
+	if len(result.AffectedKeys) > 0 {
+		TriggerResyncForConfigKeys(result.AffectedKeys)
+	}
 }
 
 func (h *ConfigReloadHandler) OnAdd(obj *unstructured.Unstructured) {
@@ -32,9 +47,7 @@ func (h *ConfigReloadHandler) OnAdd(obj *unstructured.Unstructured) {
 	}
 	h.LastSeenGeneration = obj.GetGeneration()
 	klog.Info("CollectorConfig merged-collector-config created, reloading config")
-	if keys := h.ReloadFn(); len(keys) > 0 {
-		TriggerResyncForConfigKeys(keys)
-	}
+	handleReloadResult(h.ReloadFn())
 }
 
 func (h *ConfigReloadHandler) OnUpdate(obj *unstructured.Unstructured) {
@@ -48,9 +61,7 @@ func (h *ConfigReloadHandler) OnUpdate(obj *unstructured.Unstructured) {
 	}
 	h.LastSeenGeneration = gen
 	klog.Info("CollectorConfig merged-collector-config modified, reloading config")
-	if keys := h.ReloadFn(); len(keys) > 0 {
-		TriggerResyncForConfigKeys(keys)
-	}
+	handleReloadResult(h.ReloadFn())
 }
 
 func (h *ConfigReloadHandler) OnDelete(obj *unstructured.Unstructured) {
@@ -59,21 +70,23 @@ func (h *ConfigReloadHandler) OnDelete(obj *unstructured.Unstructured) {
 	}
 	h.LastSeenGeneration = 0
 	klog.Warning("CollectorConfig merged-collector-config deleted — reverting to defaults")
-	if keys := h.ReloadFn(); len(keys) > 0 {
-		TriggerResyncForConfigKeys(keys)
-	}
+	handleReloadResult(h.ReloadFn())
 }
 
 // resyncSignal wakes the main loop when config keys need informer re-listing.
 // Buffered (cap 1) — the signal is coalesced, but all keys are preserved in pendingResync.
 var resyncSignal = make(chan struct{}, 1)
 
-// resyncMu guards pendingResync for concurrent access.
+// resyncMu guards pendingResync and pendingSyncInformers for concurrent access.
 var resyncMu sync.Mutex
 
 // pendingResync accumulates config keys from one or more TriggerResyncForConfigKeys calls.
 // Drained by the main loop when resyncSignal fires.
 var pendingResync = make(map[string]struct{})
+
+// pendingSyncInformers signals that a full syncInformers pass is needed (e.g. because
+// exclude rules changed, requiring informers to be started or stopped).
+var pendingSyncInformers bool
 
 // TriggerResyncForConfigKeys queues a set of config keys (e.g. "Deployment.apps", "Pod", "*.apps")
 // for informer re-listing. Called by the config watcher after detecting a config change.
@@ -91,16 +104,32 @@ func TriggerResyncForConfigKeys(keys []string) {
 	}
 }
 
-// drainPendingResync returns all accumulated config keys and clears the set.
-func drainPendingResync() []string {
+// TriggerSyncInformers signals the main loop that a full syncInformers pass is needed.
+// This is used when exclude rules change, requiring informers to be started or stopped.
+func TriggerSyncInformers() {
+	resyncMu.Lock()
+	pendingSyncInformers = true
+	resyncMu.Unlock()
+
+	select {
+	case resyncSignal <- struct{}{}:
+	default: // already signaled
+	}
+}
+
+// drainPendingResync returns all accumulated config keys, whether a full syncInformers
+// pass is needed, and clears the pending state.
+func drainPendingResync() ([]string, bool) {
 	resyncMu.Lock()
 	keys := make([]string, 0, len(pendingResync))
 	for k := range pendingResync {
 		keys = append(keys, k)
 		delete(pendingResync, k)
 	}
+	needSync := pendingSyncInformers
+	pendingSyncInformers = false
 	resyncMu.Unlock()
-	return keys
+	return keys, needSync
 }
 
 // dispatchResyncForKey triggers informer re-listing for a single config key.

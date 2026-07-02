@@ -4,12 +4,13 @@ import (
 	"sort"
 	"testing"
 
+	tr "github.com/stolostron/search-collector/pkg/transforms"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// drainResyncState is a test helper that clears the global resyncSignal and pendingResync.
+// drainResyncState is a test helper that clears the global resyncSignal, pendingResync, and pendingSyncInformers.
 func drainResyncState() {
 	select {
 	case <-resyncSignal:
@@ -19,6 +20,7 @@ func drainResyncState() {
 	for k := range pendingResync {
 		delete(pendingResync, k)
 	}
+	pendingSyncInformers = false
 	resyncMu.Unlock()
 }
 
@@ -39,9 +41,9 @@ func TestConfigReloadHandler_OnAdd(t *testing.T) {
 	t.Run("ignores wrong name", func(t *testing.T) {
 		drainResyncState()
 		called := false
-		h := &ConfigReloadHandler{ReloadFn: func() []string {
+		h := &ConfigReloadHandler{ReloadFn: func() *tr.ReloadResult {
 			called = true
-			return []string{"Pod"}
+			return &tr.ReloadResult{AffectedKeys: []string{"Pod"}}
 		}}
 
 		h.OnAdd(newCollectorConfigObj("other-config", 1))
@@ -50,8 +52,8 @@ func TestConfigReloadHandler_OnAdd(t *testing.T) {
 
 	t.Run("correct name triggers reload and sets generation", func(t *testing.T) {
 		drainResyncState()
-		h := &ConfigReloadHandler{ReloadFn: func() []string {
-			return []string{"Pod", "Deployment.apps"}
+		h := &ConfigReloadHandler{ReloadFn: func() *tr.ReloadResult {
+			return &tr.ReloadResult{AffectedKeys: []string{"Pod", "Deployment.apps"}}
 		}}
 
 		h.OnAdd(newCollectorConfigObj("merged-collector-config", 3))
@@ -64,9 +66,10 @@ func TestConfigReloadHandler_OnAdd(t *testing.T) {
 		default:
 			t.Fatal("expected resyncSignal")
 		}
-		received := drainPendingResync()
+		received, needSync := drainPendingResync()
 		sort.Strings(received)
 		assert.Equal(t, []string{"Deployment.apps", "Pod"}, received)
+		assert.False(t, needSync)
 	})
 }
 
@@ -74,9 +77,9 @@ func TestConfigReloadHandler_OnUpdate(t *testing.T) {
 	t.Run("ignores wrong name", func(t *testing.T) {
 		drainResyncState()
 		called := false
-		h := &ConfigReloadHandler{ReloadFn: func() []string {
+		h := &ConfigReloadHandler{ReloadFn: func() *tr.ReloadResult {
 			called = true
-			return []string{"Pod"}
+			return &tr.ReloadResult{AffectedKeys: []string{"Pod"}}
 		}}
 
 		h.OnUpdate(newCollectorConfigObj("other-config", 2))
@@ -88,9 +91,9 @@ func TestConfigReloadHandler_OnUpdate(t *testing.T) {
 		called := false
 		h := &ConfigReloadHandler{
 			LastSeenGeneration: 5,
-			ReloadFn: func() []string {
+			ReloadFn: func() *tr.ReloadResult {
 				called = true
-				return []string{"Pod"}
+				return &tr.ReloadResult{AffectedKeys: []string{"Pod"}}
 			},
 		}
 
@@ -103,8 +106,8 @@ func TestConfigReloadHandler_OnUpdate(t *testing.T) {
 		drainResyncState()
 		h := &ConfigReloadHandler{
 			LastSeenGeneration: 5,
-			ReloadFn: func() []string {
-				return []string{"Secret"}
+			ReloadFn: func() *tr.ReloadResult {
+				return &tr.ReloadResult{AffectedKeys: []string{"Secret"}}
 			},
 		}
 
@@ -116,8 +119,9 @@ func TestConfigReloadHandler_OnUpdate(t *testing.T) {
 		default:
 			t.Fatal("expected resyncSignal")
 		}
-		received := drainPendingResync()
+		received, needSync := drainPendingResync()
 		assert.Equal(t, []string{"Secret"}, received)
+		assert.False(t, needSync)
 	})
 }
 
@@ -127,9 +131,9 @@ func TestConfigReloadHandler_OnDelete(t *testing.T) {
 		called := false
 		h := &ConfigReloadHandler{
 			LastSeenGeneration: 3,
-			ReloadFn: func() []string {
+			ReloadFn: func() *tr.ReloadResult {
 				called = true
-				return []string{"Pod"}
+				return &tr.ReloadResult{AffectedKeys: []string{"Pod"}}
 			},
 		}
 
@@ -142,8 +146,8 @@ func TestConfigReloadHandler_OnDelete(t *testing.T) {
 		drainResyncState()
 		h := &ConfigReloadHandler{
 			LastSeenGeneration: 5,
-			ReloadFn: func() []string {
-				return []string{"Pod", "*.apps"}
+			ReloadFn: func() *tr.ReloadResult {
+				return &tr.ReloadResult{AffectedKeys: []string{"Pod", "*.apps"}}
 			},
 		}
 
@@ -155,15 +159,16 @@ func TestConfigReloadHandler_OnDelete(t *testing.T) {
 		default:
 			t.Fatal("expected resyncSignal")
 		}
-		received := drainPendingResync()
+		received, needSync := drainPendingResync()
 		sort.Strings(received)
 		assert.Equal(t, []string{"*.apps", "Pod"}, received)
+		assert.False(t, needSync)
 	})
 }
 
 func TestConfigReloadHandler_NoResyncWhenNoChanges(t *testing.T) {
 	drainResyncState()
-	h := &ConfigReloadHandler{ReloadFn: func() []string {
+	h := &ConfigReloadHandler{ReloadFn: func() *tr.ReloadResult {
 		return nil // no config changes
 	}}
 
@@ -193,10 +198,11 @@ func TestTriggerResyncForConfigKeys(t *testing.T) {
 	}
 
 	// Drain and verify keys.
-	received := drainPendingResync()
+	received, needSync := drainPendingResync()
 	sort.Strings(received)
 	sort.Strings(keys)
 	assert.Equal(t, keys, received)
+	assert.False(t, needSync, "TriggerResyncForConfigKeys should not set pendingSyncInformers")
 }
 
 func TestTriggerResyncForConfigKeys_Coalesce(t *testing.T) {
@@ -217,10 +223,11 @@ func TestTriggerResyncForConfigKeys_Coalesce(t *testing.T) {
 	}
 
 	// All keys from both calls should be present.
-	received := drainPendingResync()
+	received, needSync := drainPendingResync()
 	sort.Strings(received)
 	expected := []string{"Node", "Pod", "Secret"}
 	assert.Equal(t, expected, received, "all keys from both calls should be accumulated")
+	assert.False(t, needSync)
 
 	// Signal should be empty now.
 	select {
@@ -311,6 +318,82 @@ func TestDispatchResyncForKey(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTriggerSyncInformers(t *testing.T) {
+	drainResyncState()
+
+	TriggerSyncInformers()
+
+	// Signal should be present.
+	select {
+	case <-resyncSignal:
+	default:
+		t.Fatal("expected resyncSignal to have a signal")
+	}
+
+	// Drain should report needSync=true and no keys.
+	received, needSync := drainPendingResync()
+	assert.Empty(t, received, "TriggerSyncInformers should not add config keys")
+	assert.True(t, needSync, "expected pendingSyncInformers to be true")
+}
+
+func TestTriggerSyncInformers_CoalescesWithKeys(t *testing.T) {
+	drainResyncState()
+
+	TriggerResyncForConfigKeys([]string{"Pod"})
+	TriggerSyncInformers()
+
+	select {
+	case <-resyncSignal:
+	default:
+		t.Fatal("expected resyncSignal")
+	}
+
+	received, needSync := drainPendingResync()
+	assert.Equal(t, []string{"Pod"}, received)
+	assert.True(t, needSync, "expected pendingSyncInformers to be true")
+}
+
+func TestConfigReloadHandler_ExcludeRulesChanged(t *testing.T) {
+	drainResyncState()
+	h := &ConfigReloadHandler{ReloadFn: func() *tr.ReloadResult {
+		return &tr.ReloadResult{ExcludeRulesChanged: true}
+	}}
+
+	h.OnAdd(newCollectorConfigObj("merged-collector-config", 1))
+
+	select {
+	case <-resyncSignal:
+	default:
+		t.Fatal("expected resyncSignal")
+	}
+
+	received, needSync := drainPendingResync()
+	assert.Empty(t, received, "no config keys expected when only exclude rules changed")
+	assert.True(t, needSync, "expected pendingSyncInformers when exclude rules changed")
+}
+
+func TestConfigReloadHandler_BothKeysAndExcludeRules(t *testing.T) {
+	drainResyncState()
+	h := &ConfigReloadHandler{ReloadFn: func() *tr.ReloadResult {
+		return &tr.ReloadResult{
+			AffectedKeys:        []string{"Pod"},
+			ExcludeRulesChanged: true,
+		}
+	}}
+
+	h.OnAdd(newCollectorConfigObj("merged-collector-config", 1))
+
+	select {
+	case <-resyncSignal:
+	default:
+		t.Fatal("expected resyncSignal")
+	}
+
+	received, needSync := drainPendingResync()
+	assert.Equal(t, []string{"Pod"}, received)
+	assert.True(t, needSync)
 }
 
 func TestKindAndGroupFromConfigKey(t *testing.T) {

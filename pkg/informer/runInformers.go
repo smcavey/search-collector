@@ -483,7 +483,7 @@ func RunInformers(
 	var ccReloadHandler *ConfigReloadHandler
 	if config.Cfg.FeatureConfigurableCollection {
 		ccReloadHandler = &ConfigReloadHandler{
-			ReloadFn: func() []string {
+			ReloadFn: func() *tr.ReloadResult {
 				return tr.ReloadAndDiff(config.GetDynamicClient())
 			},
 		}
@@ -599,8 +599,18 @@ func RunInformers(
 			return
 
 		case <-resyncSignal:
-			// Drain all accumulated config keys and dispatch resync to affected informers.
-			configKeys := drainPendingResync()
+			// Drain all accumulated config keys and check if a full sync is needed.
+			configKeys, needSyncInformers := drainPendingResync()
+
+			if needSyncInformers {
+				// Exclude rules changed — rediscover resources and start/stop informers.
+				syncInformers(
+					ctx, *discoveryClient, informers, configKeyToGVR,
+					createInformAddHandler, createInformUpdateHandler, createInformDeleteHandler,
+				)
+				lastSynced = time.Now()
+			}
+
 			for _, key := range configKeys {
 				dispatchResyncForKey(key, configKeyToGVR, informers)
 			}

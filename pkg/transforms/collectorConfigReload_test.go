@@ -200,6 +200,7 @@ func TestSnapshotConfig_Concurrent(t *testing.T) {
 func saveAndRestoreConfigState(t *testing.T) {
 	t.Helper()
 	origConfig := mergedTransformConfig
+	origRules := excludeRules
 	origFeature := config.Cfg.FeatureConfigurableCollection
 	origNamespace := config.Cfg.PodNamespace
 	t.Cleanup(func() {
@@ -207,6 +208,7 @@ func saveAndRestoreConfigState(t *testing.T) {
 		config.Cfg.PodNamespace = origNamespace
 		configMu.Lock()
 		mergedTransformConfig = origConfig
+		excludeRules = origRules
 		configMu.Unlock()
 	})
 	config.Cfg.FeatureConfigurableCollection = true
@@ -218,6 +220,7 @@ func TestReloadAndDiff_NoChange(t *testing.T) {
 
 	configMu.Lock()
 	mergedTransformConfig = deepCopyTransformConfig(defaultTransformConfig)
+	excludeRules = nil
 	configMu.Unlock()
 
 	scheme := runtime.NewScheme()
@@ -232,6 +235,7 @@ func TestReloadAndDiff_ConfigAdded(t *testing.T) {
 
 	configMu.Lock()
 	mergedTransformConfig = deepCopyTransformConfig(defaultTransformConfig)
+	excludeRules = nil
 	configMu.Unlock()
 
 	collectionConfig := &unstructured.Unstructured{
@@ -267,7 +271,10 @@ func TestReloadAndDiff_ConfigAdded(t *testing.T) {
 
 	result := ReloadAndDiff(fakeClient)
 	assert.NotNil(t, result)
-	assert.Contains(t, result, "Pod")
+	assert.Contains(t, result.AffectedKeys, "Pod")
+	// The include rule appends an ActionInclude entry to excludeRules (going from nil to non-empty),
+	// so ExcludeRulesChanged is true. This is expected behavior.
+	assert.True(t, result.ExcludeRulesChanged)
 }
 
 func TestReloadAndDiff_ConfigRemoved(t *testing.T) {
@@ -280,6 +287,7 @@ func TestReloadAndDiff_ConfigRemoved(t *testing.T) {
 
 	configMu.Lock()
 	mergedTransformConfig = initialConfig
+	excludeRules = nil
 	configMu.Unlock()
 
 	scheme := runtime.NewScheme()
@@ -287,7 +295,7 @@ func TestReloadAndDiff_ConfigRemoved(t *testing.T) {
 
 	result := ReloadAndDiff(fakeClient)
 	assert.NotNil(t, result)
-	assert.Contains(t, result, "Pod")
+	assert.Contains(t, result.AffectedKeys, "Pod")
 }
 
 func TestReloadAndDiff_MultipleResourcesChanged(t *testing.T) {
@@ -295,6 +303,7 @@ func TestReloadAndDiff_MultipleResourcesChanged(t *testing.T) {
 
 	configMu.Lock()
 	mergedTransformConfig = deepCopyTransformConfig(defaultTransformConfig)
+	excludeRules = nil
 	configMu.Unlock()
 
 	collectionConfig := &unstructured.Unstructured{
@@ -338,7 +347,100 @@ func TestReloadAndDiff_MultipleResourcesChanged(t *testing.T) {
 
 	result := ReloadAndDiff(fakeClient)
 	assert.NotNil(t, result)
-	sort.Strings(result)
-	assert.Contains(t, result, "Pod")
-	assert.Contains(t, result, "Deployment.apps")
+	sort.Strings(result.AffectedKeys)
+	assert.Contains(t, result.AffectedKeys, "Pod")
+	assert.Contains(t, result.AffectedKeys, "Deployment.apps")
+}
+
+func TestReloadAndDiff_ExcludeRulesAdded(t *testing.T) {
+	saveAndRestoreConfigState(t)
+
+	configMu.Lock()
+	mergedTransformConfig = deepCopyTransformConfig(defaultTransformConfig)
+	excludeRules = nil
+	configMu.Unlock()
+
+	collectionConfig := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "search.open-cluster-management.io/v1alpha1",
+			"kind":       "CollectorConfig",
+			"metadata": map[string]interface{}{
+				"name":      "merged-collector-config",
+				"namespace": "test-ns",
+			},
+			"spec": map[string]interface{}{
+				"collectionRules": []interface{}{
+					map[string]interface{}{
+						"action": "exclude",
+						"resourceSelector": map[string]interface{}{
+							"apiGroups": []interface{}{""},
+							"kinds":     []interface{}{"Secret"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	fakeClient := fake.NewSimpleDynamicClient(scheme, collectionConfig)
+
+	result := ReloadAndDiff(fakeClient)
+	assert.NotNil(t, result)
+	assert.True(t, result.ExcludeRulesChanged, "exclude rules should be detected as changed")
+}
+
+func TestReloadAndDiff_ExcludeRulesRemoved(t *testing.T) {
+	saveAndRestoreConfigState(t)
+
+	configMu.Lock()
+	mergedTransformConfig = deepCopyTransformConfig(defaultTransformConfig)
+	excludeRules = []excludeRule{
+		{apiGroups: []string{""}, kinds: []string{"Secret"}, action: "exclude"},
+	}
+	configMu.Unlock()
+
+	// No CR present — reload will clear exclude rules to nil.
+	scheme := runtime.NewScheme()
+	fakeClient := fake.NewSimpleDynamicClient(scheme)
+
+	result := ReloadAndDiff(fakeClient)
+	assert.NotNil(t, result)
+	assert.True(t, result.ExcludeRulesChanged, "removing exclude rules should be detected as changed")
+}
+
+func TestSnapshotExcludeRules(t *testing.T) {
+	origRules := excludeRules
+	defer func() {
+		configMu.Lock()
+		excludeRules = origRules
+		configMu.Unlock()
+	}()
+
+	configMu.Lock()
+	excludeRules = []excludeRule{
+		{apiGroups: []string{""}, kinds: []string{"Secret"}, action: "exclude"},
+		{apiGroups: []string{"apps"}, kinds: []string{"*"}, action: "exclude"},
+	}
+	configMu.Unlock()
+
+	snapshot := snapshotExcludeRules()
+	assert.Equal(t, 2, len(snapshot))
+
+	// Mutate snapshot — should not affect global.
+	snapshot[0].action = "include"
+	configMu.RLock()
+	assert.Equal(t, excludeRule{apiGroups: []string{""}, kinds: []string{"Secret"}, action: "exclude"}, excludeRules[0])
+	configMu.RUnlock()
+}
+
+func TestExcludeRulesChanged(t *testing.T) {
+	ruleA := []excludeRule{{apiGroups: []string{""}, kinds: []string{"Secret"}, action: "exclude"}}
+	ruleB := []excludeRule{{apiGroups: []string{""}, kinds: []string{"Pod"}, action: "exclude"}}
+
+	assert.False(t, excludeRulesChanged(nil, nil))
+	assert.False(t, excludeRulesChanged(ruleA, ruleA))
+	assert.True(t, excludeRulesChanged(nil, ruleA))
+	assert.True(t, excludeRulesChanged(ruleA, nil))
+	assert.True(t, excludeRulesChanged(ruleA, ruleB))
 }
