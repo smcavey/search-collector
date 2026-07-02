@@ -24,84 +24,6 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// resyncSignal wakes the main loop when config keys need informer re-listing.
-// Buffered (cap 1) — the signal is coalesced, but all keys are preserved in pendingResync.
-var resyncSignal = make(chan struct{}, 1)
-
-// resyncMu guards pendingResync for concurrent access.
-var resyncMu sync.Mutex
-
-// pendingResync accumulates config keys from one or more TriggerResyncForConfigKeys calls.
-// Drained by the main loop when resyncSignal fires.
-var pendingResync = make(map[string]struct{})
-
-// TriggerResyncForConfigKeys queues a set of config keys (e.g. "Deployment.apps", "Pod", "*.apps")
-// for informer re-listing. Called by the config watcher after detecting a config change.
-// Keys are union-accumulated so rapid calls never lose distinct keys.
-func TriggerResyncForConfigKeys(keys []string) {
-	resyncMu.Lock()
-	for _, key := range keys {
-		pendingResync[key] = struct{}{}
-	}
-	resyncMu.Unlock()
-
-	select {
-	case resyncSignal <- struct{}{}:
-	default: // already signaled
-	}
-}
-
-// drainPendingResync returns all accumulated config keys and clears the set.
-func drainPendingResync() []string {
-	resyncMu.Lock()
-	keys := make([]string, 0, len(pendingResync))
-	for k := range pendingResync {
-		keys = append(keys, k)
-		delete(pendingResync, k)
-	}
-	resyncMu.Unlock()
-	return keys
-}
-
-// dispatchResyncForKey triggers informer re-listing for a single config key.
-// For specific kinds (e.g. "Pod", "Deployment.apps") it does an exact GVR lookup.
-// For wildcards (e.g. "*", "*.apps") it resyncs all informers in the matching API group.
-func dispatchResyncForKey(key string, configKeyToGVR map[string]schema.GroupVersionResource, informers map[schema.GroupVersionResource]informerEntry) {
-	kind, group := kindAndGroupFromConfigKey(key)
-
-	if kind != "*" {
-		gvr, ok := configKeyToGVR[key]
-		if !ok {
-			klog.V(3).Infof("Config change for %q — no matching informer found", key)
-			return
-		}
-		if entry, ok := informers[gvr]; ok {
-			klog.V(2).Infof("Config change for %q — triggering resync of %s", key, gvr.String())
-			entry.informer.TriggerResync()
-		}
-		return
-	}
-
-	// Wildcard: resync all informers in the matching API group.
-	// If group is also "*", resync everything.
-	for gvr, entry := range informers {
-		if group == "*" || gvr.Group == group {
-			klog.V(2).Infof("Config wildcard %q — triggering resync of %s", key, gvr.String())
-			entry.informer.TriggerResync()
-		}
-	}
-}
-
-// kindAndGroupFromConfigKey splits a config key into its kind and group parts.
-// "Pod" → ("Pod", ""), "Deployment.apps" → ("Deployment", "apps"),
-// "*.apps" → ("*", "apps"), "*" → ("*", "")
-func kindAndGroupFromConfigKey(key string) (kind, group string) {
-	if idx := strings.Index(key, "."); idx >= 0 {
-		return key[:idx], key[idx+1:]
-	}
-	return key, "" // core API
-}
-
 // informerEntry tracks a running informer and its cancel function.
 type informerEntry struct {
 	cancel   context.CancelFunc
@@ -556,10 +478,27 @@ func RunInformers(
 	// We keep each informer entry in a map, so we can stop or resync them as needed.
 	informers := make(map[schema.GroupVersionResource]informerEntry)
 
+	// When configurable collection is enabled, create a reload handler that will be
+	// attached to the collectorconfigs GenericInformer to hot-reload config on changes.
+	var ccReloadHandler *ConfigReloadHandler
+	if config.Cfg.FeatureConfigurableCollection {
+		ccReloadHandler = &ConfigReloadHandler{
+			ReloadFn: func() []string {
+				return tr.ReloadAndDiff(config.GetDynamicClient())
+			},
+		}
+	}
+
 	// These functions return handler functions, which are then used in creation of the informers.
 	createInformAddHandler := func(gvr schema.GroupVersionResource) func(interface{}) {
 		return func(obj interface{}) {
 			resource := obj.(*unstructured.Unstructured)
+
+			// For CollectorConfig resources, also check for config reload.
+			if ccReloadHandler != nil && gvr == CollectorConfigGVR {
+				ccReloadHandler.OnAdd(resource)
+			}
+
 			upsert := tr.Event{
 				Time:                     time.Now().Unix(),
 				Operation:                tr.Create,
@@ -574,6 +513,12 @@ func RunInformers(
 	createInformUpdateHandler := func(gvr schema.GroupVersionResource) func(interface{}, interface{}) {
 		return func(oldObj, newObj interface{}) {
 			resource := newObj.(*unstructured.Unstructured)
+
+			// For CollectorConfig resources, also check for config reload.
+			if ccReloadHandler != nil && gvr == CollectorConfigGVR {
+				ccReloadHandler.OnUpdate(resource)
+			}
+
 			upsert := tr.Event{
 				Time:                     time.Now().Unix(),
 				Operation:                tr.Update,
@@ -581,21 +526,29 @@ func RunInformers(
 				ResourceString:           gvr.Resource,
 				AdditionalPrinterColumns: gvrToColumns.get(gvr),
 			}
-			upsertTransformer.Input <- &upsert // Send resource into the transformer input channel
+			upsertTransformer.Input <- &upsert
 		}
 	}
 
-	informDeleteHandler := func(obj interface{}) {
-		resource := obj.(*unstructured.Unstructured)
-		// We don't actually have anything to transform in the case of a deletion, so we manually construct the NodeEvent
-		ne := tr.NodeEvent{
-			Time:      time.Now().Unix(),
-			Operation: tr.Delete,
-			Node: tr.Node{
-				UID: strings.Join([]string{config.Cfg.ClusterName, string(resource.GetUID())}, "/"),
-			},
+	createInformDeleteHandler := func(gvr schema.GroupVersionResource) func(interface{}) {
+		return func(obj interface{}) {
+			resource := obj.(*unstructured.Unstructured)
+
+			// For CollectorConfig resources, also check for config reload.
+			if ccReloadHandler != nil && gvr == CollectorConfigGVR {
+				ccReloadHandler.OnDelete(resource)
+			}
+
+			// We don't actually have anything to transform in the case of a deletion, so we manually construct the NodeEvent
+			ne := tr.NodeEvent{
+				Time:      time.Now().Unix(),
+				Operation: tr.Delete,
+				Node: tr.Node{
+					UID: strings.Join([]string{config.Cfg.ClusterName, string(resource.GetUID())}, "/"),
+				},
+			}
+			reconciler.Input <- ne
 		}
-		reconciler.Input <- ne
 	}
 
 	// configKeyToGVR maps config keys ("Kind" or "Kind.group") to their GVR.
@@ -603,7 +556,7 @@ func RunInformers(
 	configKeyToGVR := make(map[string]schema.GroupVersionResource)
 
 	// Initialize the informers
-	syncInformers(ctx, *discoveryClient, informers, configKeyToGVR, createInformAddHandler, createInformUpdateHandler, informDeleteHandler)
+	syncInformers(ctx, *discoveryClient, informers, configKeyToGVR, createInformAddHandler, createInformUpdateHandler, createInformDeleteHandler)
 
 	// Close the initialized channel so that we can start the sender.
 	wasInitialized = true
@@ -666,7 +619,7 @@ func RunInformers(
 			}
 
 			syncInformers(
-				ctx, *discoveryClient, informers, configKeyToGVR, createInformAddHandler, createInformUpdateHandler, informDeleteHandler,
+				ctx, *discoveryClient, informers, configKeyToGVR, createInformAddHandler, createInformUpdateHandler, createInformDeleteHandler,
 			)
 
 			lastSynced = time.Now()
@@ -682,7 +635,7 @@ func syncInformers(
 	configKeyToGVR map[string]schema.GroupVersionResource,
 	createInformerAddHandler func(schema.GroupVersionResource) func(interface{}),
 	createInformerUpdateHandler func(schema.GroupVersionResource) func(interface{}, interface{}),
-	informerDeleteHandler func(obj interface{}),
+	createInformerDeleteHandler func(schema.GroupVersionResource) func(interface{}),
 ) {
 	klog.V(2).Infof("Synchronizing informers. Informers running: %d", len(registry))
 
@@ -729,7 +682,7 @@ func syncInformers(
 			// Set up handler to pass this informer's resources into transformer
 			inform.AddFunc = createInformerAddHandler(gvr)
 			inform.UpdateFunc = createInformerUpdateHandler(gvr)
-			inform.DeleteFunc = informerDeleteHandler
+			inform.DeleteFunc = createInformerDeleteHandler(gvr)
 
 			informerCtx, informerCancel := context.WithCancel(ctx) // #nosec G118
 			registry[gvr] = informerEntry{cancel: informerCancel, informer: inform}
