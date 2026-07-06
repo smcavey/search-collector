@@ -259,6 +259,30 @@ func Test_watch(t *testing.T) {
 	}
 }
 
+// Verify that Informer.watch() exits when resyncCh is signaled.
+func Test_watch_resyncCh(t *testing.T) {
+	informer, _, _, _ := initInformer()
+
+	stopper := make(chan struct{})
+	defer close(stopper)
+	done := make(chan struct{})
+
+	go func() {
+		informer.watch(stopper)
+		close(done)
+	}()
+
+	time.Sleep(5 * time.Millisecond)
+	informer.TriggerResync()
+
+	select {
+	case <-done:
+		// watch() exited after resyncCh signal. Test passes.
+	case <-time.After(100 * time.Millisecond):
+		t.Error("Informer.watch() did not exit 100ms after TriggerResync()")
+	}
+}
+
 // Verify that WaitUntilInitialized(timeout) times out after passed time duration.
 func Test_WaitUntilInitialized_timeout(t *testing.T) {
 	informer, _, _, _ := initInformer()

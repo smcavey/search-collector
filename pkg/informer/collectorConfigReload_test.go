@@ -248,11 +248,13 @@ func TestDispatchResyncForKey(t *testing.T) {
 	podsGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
 	deploymentsGVR := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	policiesGVR := schema.GroupVersionResource{Group: "policy.open-cluster-management.io", Version: "v1", Resource: "policies"}
+	configMapsGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
 
 	configKeyToGVR := map[string]schema.GroupVersionResource{
 		"Pod":                                      podsGVR,
 		"Deployment.apps":                          deploymentsGVR,
 		"Policy.policy.open-cluster-management.io": policiesGVR,
+		"ConfigMap":                                configMapsGVR, // present in map but NOT in informers
 	}
 
 	tests := []struct {
@@ -289,6 +291,16 @@ func TestDispatchResyncForKey(t *testing.T) {
 			name:            "wildcard - all groups (*.*)",
 			key:             "*.*",
 			expectedResyncs: []schema.GroupVersionResource{podsGVR, deploymentsGVR, policiesGVR},
+		},
+		{
+			name:            "exact match - key in configKeyToGVR but GVR not in informers",
+			key:             "ConfigMap",
+			expectedResyncs: []schema.GroupVersionResource{},
+		},
+		{
+			name:            "wildcard - multi-dot group",
+			key:             "*.policy.open-cluster-management.io",
+			expectedResyncs: []schema.GroupVersionResource{policiesGVR},
 		},
 	}
 
