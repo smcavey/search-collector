@@ -33,7 +33,8 @@ const (
 )
 
 // PolicyResourceBuilder ...
-func PolicyResourceBuilder(p *policy.Policy) *PolicyResource {
+func PolicyResourceBuilder(p *policy.Policy, r *unstructured.Unstructured,
+	additionalColumns ...ExtractProperty) *PolicyResource {
 	node := transformCommon(p)         // Start off with the common properties
 	apiGroupVersion(p.TypeMeta, &node) // add kind, apigroup and version
 	// Extract the properties specific to this type
@@ -51,6 +52,7 @@ func PolicyResourceBuilder(p *policy.Policy) *PolicyResource {
 		node.Properties["_parentPolicy"] = pnamespace + "/" + ppolicy
 	}
 
+	node = applyDefaultTransformConfig(node, r, additionalColumns...)
 	return &PolicyResource{node: node}
 }
 
@@ -90,7 +92,7 @@ func getPolicyCommonProperties(c *unstructured.Unstructured, node Node) Node {
 	return node
 }
 
-func OperatorPolicyResourceBuilder(c *unstructured.Unstructured) *PolicyResource {
+func OperatorPolicyResourceBuilder(c *unstructured.Unstructured, additionalColumns ...ExtractProperty) *PolicyResource {
 	node := transformCommon(c) // Start off with the common properties
 	node = getPolicyCommonProperties(c, node)
 	node = recordRelatedObjects(c, node)
@@ -134,16 +136,18 @@ func OperatorPolicyResourceBuilder(c *unstructured.Unstructured) *PolicyResource
 	node.Properties["deploymentAvailable"] = strconv.FormatBool(deploymentAvailable)
 	node.Properties["upgradeAvailable"] = strconv.FormatBool(upgradeAvailable)
 
+	node = applyDefaultTransformConfig(node, c, additionalColumns...)
 	return &PolicyResource{
 		node: node,
 	}
 }
 
-func ConfigPolicyResourceBuilder(c *unstructured.Unstructured) *PolicyResource {
+func ConfigPolicyResourceBuilder(c *unstructured.Unstructured, additionalColumns ...ExtractProperty) *PolicyResource {
 	node := transformCommon(c) // Start off with the common properties
 	node = getPolicyCommonProperties(c, node)
 	node = recordRelatedObjects(c, node)
 
+	node = applyDefaultTransformConfig(node, c, additionalColumns...)
 	return &PolicyResource{
 		node: node,
 	}
@@ -229,61 +233,57 @@ func parseConfigPolicyRelatedObject(item any) *relatedObject {
 	return obj
 }
 
-func CertPolicyResourceBuilder(c *unstructured.Unstructured) *PolicyResource {
+func CertPolicyResourceBuilder(c *unstructured.Unstructured, additionalColumns ...ExtractProperty) *PolicyResource {
 	node := transformCommon(c) // Start off with the common properties
 
 	detailMap, found, err := unstructured.NestedMap(c.Object, "status", "compliancyDetails")
-	if len(detailMap) == 0 || !found || err != nil {
-		return &PolicyResource{
-			node: getPolicyCommonProperties(c, node),
-		}
-	}
-
-	certList := []relatedObject{}
-	for namespace, item := range detailMap {
-		details, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		// this "list" is actually a map
-		nonCompCerts, found, err := unstructured.NestedMap(details, "nonCompliantCertificatesList")
-		if len(nonCompCerts) == 0 || !found || err != nil {
-			continue
-		}
-
-		for _, item := range nonCompCerts {
-			cert, ok := item.(map[string]any)
+	if len(detailMap) > 0 && found && err == nil {
+		certList := []relatedObject{}
+		for namespace, item := range detailMap {
+			details, ok := item.(map[string]any)
 			if !ok {
 				continue
 			}
 
-			name, ok := cert["secretName"].(string)
-			if !ok {
+			// this "list" is actually a map
+			nonCompCerts, found, err := unstructured.NestedMap(details, "nonCompliantCertificatesList")
+			if len(nonCompCerts) == 0 || !found || err != nil {
 				continue
 			}
 
-			certList = append(certList, relatedObject{
-				Group:     "",
-				Version:   "v1",
-				Kind:      "Secret",
-				Namespace: namespace,
-				Name:      name,
-				EdgeType:  noncompliantEdge,
-			})
+			for _, item := range nonCompCerts {
+				cert, ok := item.(map[string]any)
+				if !ok {
+					continue
+				}
+
+				name, ok := cert["secretName"].(string)
+				if !ok {
+					continue
+				}
+
+				certList = append(certList, relatedObject{
+					Group:     "",
+					Version:   "v1",
+					Kind:      "Secret",
+					Namespace: namespace,
+					Name:      name,
+					EdgeType:  noncompliantEdge,
+				})
+			}
 		}
+
+		// sorting is required to keep the list stable, because it is populated from a map
+		slices.SortFunc(certList, func(a, b relatedObject) int {
+			return strings.Compare(a.String(), b.String())
+		})
+
+		node.Metadata["relObjs"] = certList
 	}
 
-	// sorting is required to keep the list stable, because it is populated from a map
-	slices.SortFunc(certList, func(a, b relatedObject) int {
-		return strings.Compare(a.String(), b.String())
-	})
-
-	node.Metadata["relObjs"] = certList
-
-	return &PolicyResource{
-		node: getPolicyCommonProperties(c, node),
-	}
+	node = getPolicyCommonProperties(c, node)
+	node = applyDefaultTransformConfig(node, c, additionalColumns...)
+	return &PolicyResource{node: node}
 }
 
 // BuildNode construct the node for Policy Resources
