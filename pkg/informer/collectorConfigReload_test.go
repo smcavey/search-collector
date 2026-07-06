@@ -52,6 +52,26 @@ func TestConfigReloadHandler_OnAdd(t *testing.T) {
 		assert.False(t, called, "ReloadFn should not be called for wrong name")
 	})
 
+	t.Run("skips re-add with unchanged generation", func(t *testing.T) {
+		drainResyncState()
+		called := false
+		h := &ConfigReloadHandler{
+			LastSeenGeneration: 3,
+			ReloadFn: func() *tr.ReloadResult {
+				called = true
+				return &tr.ReloadResult{AffectedKeys: []string{"Pod"}}
+			},
+		}
+
+		h.OnAdd(newCollectorConfigObj("merged-collector-config", 3))
+		assert.False(t, called, "ReloadFn should not be called when generation is unchanged")
+		select {
+		case <-resyncSignal:
+			t.Fatal("resyncSignal should not be triggered on re-add with same generation")
+		default:
+		}
+	})
+
 	t.Run("correct name triggers reload and sets generation", func(t *testing.T) {
 		drainResyncState()
 		h := &ConfigReloadHandler{ReloadFn: func() *tr.ReloadResult {

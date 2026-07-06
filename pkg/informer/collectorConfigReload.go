@@ -47,7 +47,12 @@ func (h *ConfigReloadHandler) OnAdd(obj *unstructured.Unstructured) {
 	if obj.GetName() != "merged-collector-config" {
 		return
 	}
-	h.LastSeenGeneration = obj.GetGeneration()
+	gen := obj.GetGeneration()
+	if gen == h.LastSeenGeneration {
+		klog.V(3).Info("CollectorConfig re-add with unchanged generation, skipping reload")
+		return
+	}
+	h.LastSeenGeneration = gen
 	klog.Info("CollectorConfig merged-collector-config created, reloading config")
 	handleReloadResult(h.ReloadFn())
 }
