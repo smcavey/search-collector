@@ -1,3 +1,5 @@
+// Copyright Contributors to the Open Cluster Management project
+
 package informer
 
 import (
@@ -251,10 +253,10 @@ func TestDispatchResyncForKey(t *testing.T) {
 	configMapsGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
 
 	configKeyToGVR := map[string]schema.GroupVersionResource{
-		"Pod":                                      podsGVR,
-		"Deployment.apps":                          deploymentsGVR,
+		"Pod":             podsGVR,
+		"Deployment.apps": deploymentsGVR,
 		"Policy.policy.open-cluster-management.io": policiesGVR,
-		"ConfigMap":                                configMapsGVR, // present in map but NOT in informers
+		"ConfigMap": configMapsGVR, // present in map but NOT in informers
 	}
 
 	tests := []struct {
