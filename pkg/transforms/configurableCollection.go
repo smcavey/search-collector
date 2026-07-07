@@ -19,13 +19,13 @@ import (
 // mergedTransformConfig contains the merged configuration from defaultTransformConfig plus CollectorConfig CR customizations.
 // This is populated by LoadAndMergeConfigurableCollection and used by getTransformConfig.
 // Wildcard entries like "*" (core group) or "*.apps" are used for apigroup-wide collectConditions.
-// Protected by configMu — readers use RLock, writers build a new map locally then swap under Lock.
+// Protected by mergedTransformConfigMu — readers use RLock, writers build a new map locally then swap under Lock.
 var mergedTransformConfig map[string]ResourceConfig
 
-// configMu guards mergedTransformConfig for concurrent access.
+// mergedTransformConfigMu guards mergedTransformConfig for concurrent access.
 // Readers (getTransformConfig, wildcard lookup in common.go) take RLock.
 // The config watcher takes Lock only to swap the pointer after building a new map.
-var configMu sync.RWMutex
+var mergedTransformConfigMu sync.RWMutex
 
 // excludeRule is a single entry in the ordered exclude/include evaluation list.
 // Each rule is a cartesian product of apiGroups × kinds. Action determines whether
@@ -48,7 +48,7 @@ type excludeRule struct {
 // matching rule (false = include, true = exclude). An empty list means no resources
 // are excluded.
 //
-// Protected by configMu — readers use RLock, writers build a new slice locally then
+// Protected by mergedTransformConfigMu — readers use RLock, writers build a new slice locally then
 // swap under Lock (alongside mergedTransformConfig).
 var excludeRules []excludeRule
 
@@ -58,10 +58,10 @@ func LoadAndMergeConfigurableCollection() {
 	if !config.Cfg.FeatureConfigurableCollection {
 		klog.Info("Configurable collection feature is disabled, skipping custom config load")
 		// Initialize mergedTransformConfig to a copy of defaultTransformConfig
-		configMu.Lock()
+		mergedTransformConfigMu.Lock()
 		mergedTransformConfig = deepCopyTransformConfig(defaultTransformConfig)
 		excludeRules = nil
-		configMu.Unlock()
+		mergedTransformConfigMu.Unlock()
 		return
 	}
 
@@ -103,10 +103,10 @@ func loadAndMergeConfigurableCollectionWithClient(dynamicClient dynamic.Interfac
 	if err != nil {
 		// CR not found or not accessible — no status to update, just log and swap defaults.
 		klog.Infof("Could not load merged-collector-config resource: %v. Using default config only", err)
-		configMu.Lock()
+		mergedTransformConfigMu.Lock()
 		mergedTransformConfig = newConfig
 		excludeRules = nil
-		configMu.Unlock()
+		mergedTransformConfigMu.Unlock()
 		return
 	}
 
@@ -116,10 +116,10 @@ func loadAndMergeConfigurableCollectionWithClient(dynamicClient dynamic.Interfac
 		msg := fmt.Sprintf("Could not convert merged-collector-config to typed object: %v. Using default config only", convErr)
 		klog.Warning(msg)
 		updateCollectorConfigStatus(dynamicClient, namespace, configObj, []string{msg}, collectorConfigReasonLoadError)
-		configMu.Lock()
+		mergedTransformConfigMu.Lock()
 		mergedTransformConfig = newConfig
 		excludeRules = nil
-		configMu.Unlock()
+		mergedTransformConfigMu.Unlock()
 		return
 	}
 
@@ -131,10 +131,10 @@ func loadAndMergeConfigurableCollectionWithClient(dynamicClient dynamic.Interfac
 		klog.Warning("No collectionRules found in merged-collector-config resource")
 		// Empty rules is a valid (though unusual) configuration — mark as Applied.
 		updateCollectorConfigStatus(dynamicClient, namespace, configObj, nil, collectorConfigReasonApplied)
-		configMu.Lock()
+		mergedTransformConfigMu.Lock()
 		mergedTransformConfig = newConfig
 		excludeRules = nil
-		configMu.Unlock()
+		mergedTransformConfigMu.Unlock()
 		return
 	}
 
@@ -305,10 +305,10 @@ func loadAndMergeConfigurableCollectionWithClient(dynamicClient dynamic.Interfac
 	}
 
 	// Atomic swap — take write lock only for the pointer assignment.
-	configMu.Lock()
+	mergedTransformConfigMu.Lock()
 	mergedTransformConfig = newConfig
 	excludeRules = newExcludeRules
-	configMu.Unlock()
+	mergedTransformConfigMu.Unlock()
 
 	// Determine final condition reason based on whether any rules were skipped.
 	reason := collectorConfigReasonApplied
@@ -440,8 +440,8 @@ func matchesExcludeRule(group, kind string, apiGroups, kinds []string) bool {
 // include "Deployment.apps" results in Deployments being collected (not excluded).
 func IsResourceExcluded(group, kind string) bool {
 	excluded := false
-	configMu.RLock()
-	defer configMu.RUnlock()
+	mergedTransformConfigMu.RLock()
+	defer mergedTransformConfigMu.RUnlock()
 	for _, rule := range excludeRules {
 		if matchesExcludeRule(group, kind, rule.apiGroups, rule.kinds) {
 			excluded = rule.action == v1alpha1.ActionExclude
@@ -451,10 +451,10 @@ func IsResourceExcluded(group, kind string) bool {
 }
 
 // mergeCollectConditions enables condition extraction for the given apiGroups and kinds.
-// When kind is "*", a wildcard entry (e.g., "*" or "*.apps") is stored in cfg,
+// When kind is "*", a wildcard entry (e.g., "*" or "*.apps") is stored in collectionCfg,
 // enabling condition extraction for all resources in that apiGroup at runtime.
 // For specific kinds, extractConditions is set for each kind+apiGroup combination.
-func mergeCollectConditions(cfg map[string]ResourceConfig, apiGroups, kinds []string) {
+func mergeCollectConditions(collectionCfg map[string]ResourceConfig, apiGroups, kinds []string) {
 	for _, apiGroup := range apiGroups {
 		for _, kind := range kinds {
 			if kind == "" {
@@ -464,24 +464,24 @@ func mergeCollectConditions(cfg map[string]ResourceConfig, apiGroups, kinds []st
 			if apiGroup != "" {
 				resourceKey = kind + "." + apiGroup
 			}
-			resourceConfig, exists := cfg[resourceKey]
+			resourceConfig, exists := collectionCfg[resourceKey]
 			if !exists {
 				resourceConfig = ResourceConfig{
 					properties: []ExtractProperty{},
 				}
 			}
 			resourceConfig.extractConditions = true
-			cfg[resourceKey] = resourceConfig
+			collectionCfg[resourceKey] = resourceConfig
 			klog.V(2).Infof("Enabled condition collection for resource %s", resourceKey)
 		}
 	}
 }
 
 // mergeCollectAnnotations enables annotation extraction for the given apiGroups and kinds.
-// When kind is "*", a wildcard entry (e.g., "*" or "*.apps") is stored in cfg,
+// When kind is "*", a wildcard entry (e.g., "*" or "*.apps") is stored in collectionCfg,
 // enabling annotation extraction for all resources in that apiGroup at runtime.
 // For specific kinds, extractAnnotations is set for each kind+apiGroup combination.
-func mergeCollectAnnotations(cfg map[string]ResourceConfig, apiGroups, kinds []string) {
+func mergeCollectAnnotations(collectionCfg map[string]ResourceConfig, apiGroups, kinds []string) {
 	for _, apiGroup := range apiGroups {
 		for _, kind := range kinds {
 			if kind == "" {
@@ -491,24 +491,24 @@ func mergeCollectAnnotations(cfg map[string]ResourceConfig, apiGroups, kinds []s
 			if apiGroup != "" {
 				resourceKey = kind + "." + apiGroup
 			}
-			resourceConfig, exists := cfg[resourceKey]
+			resourceConfig, exists := collectionCfg[resourceKey]
 			if !exists {
 				resourceConfig = ResourceConfig{
 					properties: []ExtractProperty{},
 				}
 			}
 			resourceConfig.extractAnnotations = true
-			cfg[resourceKey] = resourceConfig
+			collectionCfg[resourceKey] = resourceConfig
 			klog.V(2).Infof("Enabled annotation collection for resource %s", resourceKey)
 		}
 	}
 }
 
 // mergeCollectPrinterColumns sets the additionalPrinterColumns priority threshold for the given apiGroups and kinds.
-// When kind is "*", a wildcard entry (e.g., "*" or "*.apps") is stored in cfg,
+// When kind is "*", a wildcard entry (e.g., "*" or "*.apps") is stored in collectionCfg,
 // enabling printer column collection for all resources in that apiGroup at runtime.
 // For specific kinds, the priority is set for each kind+apiGroup combination.
-func mergeCollectPrinterColumns(cfg map[string]ResourceConfig, apiGroups, kinds []string, priority int) {
+func mergeCollectPrinterColumns(collectionCfg map[string]ResourceConfig, apiGroups, kinds []string, priority int) {
 	for _, apiGroup := range apiGroups {
 		for _, kind := range kinds {
 			if kind == "" {
@@ -518,7 +518,7 @@ func mergeCollectPrinterColumns(cfg map[string]ResourceConfig, apiGroups, kinds 
 			if apiGroup != "" {
 				resourceKey = kind + "." + apiGroup
 			}
-			resourceConfig, exists := cfg[resourceKey]
+			resourceConfig, exists := collectionCfg[resourceKey]
 			if !exists {
 				resourceConfig = ResourceConfig{
 					properties: []ExtractProperty{},
@@ -529,7 +529,7 @@ func mergeCollectPrinterColumns(cfg map[string]ResourceConfig, apiGroups, kinds 
 			if resourceConfig.additionalPrinterColumnsPriority == nil || priority > *resourceConfig.additionalPrinterColumnsPriority {
 				resourceConfig.additionalPrinterColumnsPriority = &priority
 			}
-			cfg[resourceKey] = resourceConfig
+			collectionCfg[resourceKey] = resourceConfig
 			klog.V(2).Infof("Set additionalPrinterColumns priority to %d for resource %s", *resourceConfig.additionalPrinterColumnsPriority, resourceKey)
 		}
 	}

@@ -403,9 +403,9 @@ func getTransformConfig(group, kind string) (ResourceConfig, bool) {
 	// Falls back to defaultTransformConfig if configurable collection is disabled.
 	// RLock scope is narrow: only the pointer copy needs protection. After this,
 	// the local transformConfig points to an immutable map (never mutated after swap).
-	configMu.RLock()
+	mergedTransformConfigMu.RLock()
 	transformConfig := mergedTransformConfig
-	configMu.RUnlock()
+	mergedTransformConfigMu.RUnlock()
 	if transformConfig == nil {
 		// Safety fallback if LoadAndMergeConfigurableCollection hasn't been called yet
 		transformConfig = defaultTransformConfig

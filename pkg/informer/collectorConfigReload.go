@@ -38,8 +38,8 @@ func handleReloadResult(result *tr.ReloadResult) {
 	if result.ExcludeRulesChanged {
 		TriggerSyncInformers()
 	}
-	if len(result.AffectedKeys) > 0 {
-		TriggerResyncForConfigKeys(result.AffectedKeys)
+	if len(result.AffectedResources) > 0 {
+		TriggerResyncForConfigKeys(result.AffectedResources)
 	}
 }
 
@@ -80,14 +80,14 @@ func (h *ConfigReloadHandler) OnDelete(obj *unstructured.Unstructured) {
 	handleReloadResult(h.ReloadFn())
 }
 
-// resyncSignal wakes the main loop when config keys need informer re-listing.
+// resyncSignal wakes the main loop when resources need informer re-listing.
 // Buffered (cap 1) — the signal is coalesced, but all keys are preserved in pendingResync.
 var resyncSignal = make(chan struct{}, 1)
 
 // resyncMu guards pendingResync and pendingSyncInformers for concurrent access.
 var resyncMu sync.Mutex
 
-// pendingResync accumulates config keys from one or more TriggerResyncForConfigKeys calls.
+// pendingResync accumulates resources from one or more TriggerResyncForConfigKeys calls.
 // Drained by the main loop when resyncSignal fires.
 var pendingResync = make(map[string]struct{})
 
@@ -95,7 +95,7 @@ var pendingResync = make(map[string]struct{})
 // exclude rules changed, requiring informers to be started or stopped).
 var pendingSyncInformers bool
 
-// TriggerResyncForConfigKeys queues a set of config keys (e.g. "Deployment.apps", "Pod", "*.apps")
+// TriggerResyncForConfigKeys queues a set of resources (e.g. "Deployment.apps", "Pod", "*.apps")
 // for informer re-listing. Called by the config watcher after detecting a config change.
 // Keys are union-accumulated so rapid calls never lose distinct keys.
 func TriggerResyncForConfigKeys(keys []string) {
@@ -124,7 +124,7 @@ func TriggerSyncInformers() {
 	}
 }
 
-// drainPendingResync returns all accumulated config keys, whether a full syncInformers
+// drainPendingResync returns all accumulated resources, whether a full syncInformers
 // pass is needed, and clears the pending state.
 func drainPendingResync() ([]string, bool) {
 	resyncMu.Lock()
@@ -139,14 +139,14 @@ func drainPendingResync() ([]string, bool) {
 	return keys, needSync
 }
 
-// dispatchResyncForKey triggers informer re-listing for a single config key.
+// dispatchResyncForKey triggers informer re-listing for a single resource.
 // For specific kinds (e.g. "Pod", "Deployment.apps") it does an exact GVR lookup.
 // For wildcards (e.g. "*", "*.apps") it resyncs all informers in the matching API group.
-func dispatchResyncForKey(key string, configKeyToGVR map[string]schema.GroupVersionResource, informers map[schema.GroupVersionResource]informerEntry) {
+func dispatchResyncForKey(key string, resourceNameToGVR map[string]schema.GroupVersionResource, informers map[schema.GroupVersionResource]informerEntry) {
 	kind, group := kindAndGroupFromConfigKey(key)
 
 	if kind != "*" {
-		gvr, ok := configKeyToGVR[key]
+		gvr, ok := resourceNameToGVR[key]
 		if !ok {
 			klog.V(3).Infof("Config change for %q — no matching informer found", key)
 			return
@@ -168,7 +168,7 @@ func dispatchResyncForKey(key string, configKeyToGVR map[string]schema.GroupVers
 	}
 }
 
-// kindAndGroupFromConfigKey splits a config key into its kind and group parts.
+// kindAndGroupFromConfigKey splits a resource into its kind and group parts.
 // "Pod" → ("Pod", ""), "Deployment.apps" → ("Deployment", "apps"),
 // "*.apps" → ("*", "apps"), "*" → ("*", "")
 func kindAndGroupFromConfigKey(key string) (kind, group string) {

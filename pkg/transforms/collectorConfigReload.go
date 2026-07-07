@@ -11,9 +11,9 @@ import (
 
 // ReloadResult describes what changed after a config reload.
 type ReloadResult struct {
-	// AffectedKeys lists config keys (e.g. "Pod", "Deployment.apps") whose transform
+	// AffectedResources lists config keys (e.g. "Pod", "Deployment.apps") whose transform
 	// properties changed. These trigger targeted informer re-listing.
-	AffectedKeys []string
+	AffectedResources []string
 	// ExcludeRulesChanged is true when the exclude/include rule list was modified.
 	// This requires a full syncInformers pass to start/stop informers.
 	ExcludeRulesChanged bool
@@ -26,7 +26,7 @@ func ReloadAndDiff(dynamicClient dynamic.Interface) *ReloadResult {
 	oldConfig := snapshotConfig()
 	oldRules := snapshotExcludeRules()
 
-	// Reload config from cluster (performs atomic swap under configMu.Lock).
+	// Reload config from cluster (performs atomic swap under mergedTransformConfigMu.Lock).
 	loadAndMergeConfigurableCollectionWithClient(dynamicClient)
 
 	newConfig := snapshotConfig()
@@ -36,19 +36,19 @@ func ReloadAndDiff(dynamicClient dynamic.Interface) *ReloadResult {
 	rulesChanged := excludeRulesChanged(oldRules, newRules)
 
 	if len(affected) == 0 && !rulesChanged {
-		klog.V(2).Info("Config reload: no config changes detected")
+		klog.V(2).Info("CollectorConfig reload: no config changes detected")
 		return nil
 	}
 
 	if rulesChanged {
-		klog.Info("Config reload: exclude rules changed")
+		klog.Info("CollectorConfig reload: exclude rules changed")
 	}
 	if len(affected) > 0 {
-		klog.Infof("Config reload: %d resource config(s) changed: %v", len(affected), affected)
+		klog.Infof("CollectorConfig reload: %d resource config(s) changed: %v", len(affected), affected)
 	}
 
 	return &ReloadResult{
-		AffectedKeys:        affected,
+		AffectedResources:   affected,
 		ExcludeRulesChanged: rulesChanged,
 	}
 }
@@ -56,9 +56,9 @@ func ReloadAndDiff(dynamicClient dynamic.Interface) *ReloadResult {
 // snapshotConfig returns a deep copy of the current mergedTransformConfig.
 // The copy is taken under RLock to ensure a consistent snapshot.
 func snapshotConfig() map[string]ResourceConfig {
-	configMu.RLock()
+	mergedTransformConfigMu.RLock()
 	snapshot := deepCopyTransformConfig(mergedTransformConfig)
-	configMu.RUnlock()
+	mergedTransformConfigMu.RUnlock()
 	return snapshot
 }
 
@@ -66,10 +66,10 @@ func snapshotConfig() map[string]ResourceConfig {
 // The copy is taken under RLock to ensure a consistent snapshot. Each excludeRule
 // contains only slices of strings (immutable once built), so a shallow copy suffices.
 func snapshotExcludeRules() []excludeRule {
-	configMu.RLock()
+	mergedTransformConfigMu.RLock()
 	snapshot := make([]excludeRule, len(excludeRules))
 	copy(snapshot, excludeRules)
-	configMu.RUnlock()
+	mergedTransformConfigMu.RUnlock()
 	return snapshot
 }
 
@@ -78,7 +78,7 @@ func excludeRulesChanged(old, new []excludeRule) bool {
 	return !reflect.DeepEqual(old, new)
 }
 
-// diffConfigs compares old and new config maps, returning the list of config keys
+// diffConfigs compares old and new ResourceConfig maps, returning the list of resources
 // that were added, removed, or changed.
 func diffConfigs(old, new map[string]ResourceConfig) []string {
 	affected := map[string]bool{}

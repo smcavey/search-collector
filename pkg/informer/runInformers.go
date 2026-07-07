@@ -551,12 +551,12 @@ func RunInformers(
 		}
 	}
 
-	// configKeyToGVR maps config keys ("Kind" or "Kind.group") to their GVR.
+	// resourceNameToGVR maps resources ("Kind" or "Kind.group") to their GVR.
 	// Populated by syncInformers from the discovery API, used for exact-match resync dispatch.
-	configKeyToGVR := make(map[string]schema.GroupVersionResource)
+	resourceNameToGVR := make(map[string]schema.GroupVersionResource)
 
 	// Initialize the informers
-	syncInformers(ctx, *discoveryClient, informers, configKeyToGVR, createInformAddHandler, createInformUpdateHandler, createInformDeleteHandler)
+	syncInformers(ctx, *discoveryClient, informers, resourceNameToGVR, createInformAddHandler, createInformUpdateHandler, createInformDeleteHandler)
 
 	// Close the initialized channel so that we can start the sender.
 	wasInitialized = true
@@ -599,20 +599,20 @@ func RunInformers(
 			return
 
 		case <-resyncSignal:
-			// Drain all accumulated config keys and check if a full sync is needed.
+			// Drain all accumulated resources and check if a full sync is needed.
 			configKeys, needSyncInformers := drainPendingResync()
 
 			if needSyncInformers {
 				// Exclude rules changed — rediscover resources and start/stop informers.
 				syncInformers(
-					ctx, *discoveryClient, informers, configKeyToGVR,
+					ctx, *discoveryClient, informers, resourceNameToGVR,
 					createInformAddHandler, createInformUpdateHandler, createInformDeleteHandler,
 				)
 				lastSynced = time.Now()
 			}
 
 			for _, key := range configKeys {
-				dispatchResyncForKey(key, configKeyToGVR, informers)
+				dispatchResyncForKey(key, resourceNameToGVR, informers)
 			}
 
 		case _, ok := <-syncCh:
@@ -629,7 +629,7 @@ func RunInformers(
 			}
 
 			syncInformers(
-				ctx, *discoveryClient, informers, configKeyToGVR, createInformAddHandler, createInformUpdateHandler, createInformDeleteHandler,
+				ctx, *discoveryClient, informers, resourceNameToGVR, createInformAddHandler, createInformUpdateHandler, createInformDeleteHandler,
 			)
 
 			lastSynced = time.Now()
@@ -642,7 +642,7 @@ func syncInformers(
 	ctx context.Context,
 	client discovery.DiscoveryClient,
 	registry map[schema.GroupVersionResource]informerEntry,
-	configKeyToGVR map[string]schema.GroupVersionResource,
+	resourceNameToGVR map[string]schema.GroupVersionResource,
 	createInformerAddHandler func(schema.GroupVersionResource) func(interface{}),
 	createInformerUpdateHandler func(schema.GroupVersionResource) func(interface{}, interface{}),
 	createInformerDeleteHandler func(schema.GroupVersionResource) func(interface{}),
@@ -657,11 +657,11 @@ func syncInformers(
 	// Update the config key → GVR reverse map used for targeted resync dispatch.
 	if keyMap != nil {
 		// Clear and repopulate — discovery may have added or removed resources.
-		for k := range configKeyToGVR {
-			delete(configKeyToGVR, k)
+		for k := range resourceNameToGVR {
+			delete(resourceNameToGVR, k)
 		}
 		for k, v := range keyMap {
-			configKeyToGVR[k] = v
+			resourceNameToGVR[k] = v
 		}
 	}
 

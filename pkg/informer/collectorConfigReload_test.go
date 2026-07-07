@@ -45,7 +45,7 @@ func TestConfigReloadHandler_OnAdd(t *testing.T) {
 		called := false
 		h := &ConfigReloadHandler{ReloadFn: func() *tr.ReloadResult {
 			called = true
-			return &tr.ReloadResult{AffectedKeys: []string{"Pod"}}
+			return &tr.ReloadResult{AffectedResources: []string{"Pod"}}
 		}}
 
 		h.OnAdd(newCollectorConfigObj("other-config", 1))
@@ -59,7 +59,7 @@ func TestConfigReloadHandler_OnAdd(t *testing.T) {
 			LastSeenGeneration: 3,
 			ReloadFn: func() *tr.ReloadResult {
 				called = true
-				return &tr.ReloadResult{AffectedKeys: []string{"Pod"}}
+				return &tr.ReloadResult{AffectedResources: []string{"Pod"}}
 			},
 		}
 
@@ -75,7 +75,7 @@ func TestConfigReloadHandler_OnAdd(t *testing.T) {
 	t.Run("correct name triggers reload and sets generation", func(t *testing.T) {
 		drainResyncState()
 		h := &ConfigReloadHandler{ReloadFn: func() *tr.ReloadResult {
-			return &tr.ReloadResult{AffectedKeys: []string{"Pod", "Deployment.apps"}}
+			return &tr.ReloadResult{AffectedResources: []string{"Pod", "Deployment.apps"}}
 		}}
 
 		h.OnAdd(newCollectorConfigObj("merged-collector-config", 3))
@@ -101,7 +101,7 @@ func TestConfigReloadHandler_OnUpdate(t *testing.T) {
 		called := false
 		h := &ConfigReloadHandler{ReloadFn: func() *tr.ReloadResult {
 			called = true
-			return &tr.ReloadResult{AffectedKeys: []string{"Pod"}}
+			return &tr.ReloadResult{AffectedResources: []string{"Pod"}}
 		}}
 
 		h.OnUpdate(newCollectorConfigObj("other-config", 2))
@@ -115,7 +115,7 @@ func TestConfigReloadHandler_OnUpdate(t *testing.T) {
 			LastSeenGeneration: 5,
 			ReloadFn: func() *tr.ReloadResult {
 				called = true
-				return &tr.ReloadResult{AffectedKeys: []string{"Pod"}}
+				return &tr.ReloadResult{AffectedResources: []string{"Pod"}}
 			},
 		}
 
@@ -129,7 +129,7 @@ func TestConfigReloadHandler_OnUpdate(t *testing.T) {
 		h := &ConfigReloadHandler{
 			LastSeenGeneration: 5,
 			ReloadFn: func() *tr.ReloadResult {
-				return &tr.ReloadResult{AffectedKeys: []string{"Secret"}}
+				return &tr.ReloadResult{AffectedResources: []string{"Secret"}}
 			},
 		}
 
@@ -155,7 +155,7 @@ func TestConfigReloadHandler_OnDelete(t *testing.T) {
 			LastSeenGeneration: 3,
 			ReloadFn: func() *tr.ReloadResult {
 				called = true
-				return &tr.ReloadResult{AffectedKeys: []string{"Pod"}}
+				return &tr.ReloadResult{AffectedResources: []string{"Pod"}}
 			},
 		}
 
@@ -169,7 +169,7 @@ func TestConfigReloadHandler_OnDelete(t *testing.T) {
 		h := &ConfigReloadHandler{
 			LastSeenGeneration: 5,
 			ReloadFn: func() *tr.ReloadResult {
-				return &tr.ReloadResult{AffectedKeys: []string{"Pod", "*.apps"}}
+				return &tr.ReloadResult{AffectedResources: []string{"Pod", "*.apps"}}
 			},
 		}
 
@@ -272,7 +272,7 @@ func TestDispatchResyncForKey(t *testing.T) {
 	policiesGVR := schema.GroupVersionResource{Group: "policy.open-cluster-management.io", Version: "v1", Resource: "policies"}
 	configMapsGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
 
-	configKeyToGVR := map[string]schema.GroupVersionResource{
+	resourceNameToGVR := map[string]schema.GroupVersionResource{
 		"Pod":             podsGVR,
 		"Deployment.apps": deploymentsGVR,
 		"Policy.policy.open-cluster-management.io": policiesGVR,
@@ -315,7 +315,7 @@ func TestDispatchResyncForKey(t *testing.T) {
 			expectedResyncs: []schema.GroupVersionResource{podsGVR, deploymentsGVR, policiesGVR},
 		},
 		{
-			name:            "exact match - key in configKeyToGVR but GVR not in informers",
+			name:            "exact match - key in resourceNameToGVR but GVR not in informers",
 			key:             "ConfigMap",
 			expectedResyncs: []schema.GroupVersionResource{},
 		},
@@ -335,7 +335,7 @@ func TestDispatchResyncForKey(t *testing.T) {
 				policiesGVR:    mockInformerEntry(),
 			}
 
-			dispatchResyncForKey(tc.key, configKeyToGVR, informers)
+			dispatchResyncForKey(tc.key, resourceNameToGVR, informers)
 
 			expectedSet := map[schema.GroupVersionResource]bool{}
 			for _, gvr := range tc.expectedResyncs {
@@ -368,7 +368,7 @@ func TestTriggerSyncInformers(t *testing.T) {
 
 	// Drain should report needSync=true and no keys.
 	received, needSync := drainPendingResync()
-	assert.Empty(t, received, "TriggerSyncInformers should not add config keys")
+	assert.Empty(t, received, "TriggerSyncInformers should not add resources")
 	assert.True(t, needSync, "expected pendingSyncInformers to be true")
 }
 
@@ -404,7 +404,7 @@ func TestConfigReloadHandler_ExcludeRulesChanged(t *testing.T) {
 	}
 
 	received, needSync := drainPendingResync()
-	assert.Empty(t, received, "no config keys expected when only exclude rules changed")
+	assert.Empty(t, received, "no resources expected when only exclude rules changed")
 	assert.True(t, needSync, "expected pendingSyncInformers when exclude rules changed")
 }
 
@@ -412,7 +412,7 @@ func TestConfigReloadHandler_BothKeysAndExcludeRules(t *testing.T) {
 	drainResyncState()
 	h := &ConfigReloadHandler{ReloadFn: func() *tr.ReloadResult {
 		return &tr.ReloadResult{
-			AffectedKeys:        []string{"Pod"},
+			AffectedResources:   []string{"Pod"},
 			ExcludeRulesChanged: true,
 		}
 	}}

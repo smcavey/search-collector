@@ -100,7 +100,7 @@ func isResourceMatchingList(resourceList []Resource, group, kind string) (string
 }
 
 // Returns a map containing all the GVRs on the cluster of resources that support WATCH (ignoring clusters and events).
-// Also returns a configKeyToGVR map that maps config keys ("Kind" for core, "Kind.group" for non-core) to their GVR.
+// Also returns a resourceNameToGVR map that maps resources ("Kind" for core, "Kind.group" for non-core) to their GVR.
 func SupportedResources(discoveryClient discovery.DiscoveryClient) (map[schema.GroupVersionResource]struct{}, map[string]schema.GroupVersionResource, error) {
 	ctx := context.TODO()
 	// Next step is to discover all the gettable resource types that the kuberenetes api server knows about.
@@ -129,9 +129,9 @@ func SupportedResources(discoveryClient discovery.DiscoveryClient) (map[schema.G
 
 	tr.NonNSResourceMap = make(map[string]struct{}) //map to store non-namespaced resources
 
-	// configKeyMap maps config keys ("Kind" for core, "Kind.group" for non-core) to GVR.
+	// resourceNameMap maps resources ("Kind" for core, "Kind.group" for non-core) to GVR.
 	// Built alongside the watch-resource filter so it reflects the same set of resources.
-	configKeyMap := make(map[string]schema.GroupVersionResource)
+	resourceNameMap := make(map[string]schema.GroupVersionResource)
 
 	// Filter down to only resources which support WATCH operations
 	for _, apiList := range apiResources { // This comes out in a nested list, so loop through a couple things
@@ -177,12 +177,12 @@ func SupportedResources(discoveryClient discovery.DiscoveryClient) (map[schema.G
 				continue
 			}
 
-			watchResources = append(watchResources, apiResource)
-
 			// Build config key → GVR mapping for top-level resources only.
 			// Skip subresources (e.g. "pods/status") — they share the same Kind
 			// as their parent and would overwrite the parent's mapping.
 			if !strings.Contains(apiResource.Name, "/") {
+				watchResources = append(watchResources, apiResource)
+
 				thisGVR := schema.GroupVersionResource{
 					Group:    apiGroup,
 					Version:  version,
@@ -192,7 +192,7 @@ func SupportedResources(discoveryClient discovery.DiscoveryClient) (map[schema.G
 				if apiGroup != "" {
 					configKey = apiResource.Kind + "." + apiGroup
 				}
-				configKeyMap[configKey] = thisGVR
+				resourceNameMap[configKey] = thisGVR
 			}
 		}
 
@@ -203,5 +203,5 @@ func SupportedResources(discoveryClient discovery.DiscoveryClient) (map[schema.G
 	// Use handy converter function to convert into GroupVersionResource objects, which we need in order to make informers
 	gvrList, err := discovery.GroupVersionResources(supportedResources)
 
-	return gvrList, configKeyMap, err
+	return gvrList, resourceNameMap, err
 }
