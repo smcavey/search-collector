@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stolostron/search-collector/pkg/config"
+	rec "github.com/stolostron/search-collector/pkg/reconciler"
 	tr "github.com/stolostron/search-collector/pkg/transforms"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -148,6 +149,78 @@ func getSimpleTransformedCRD() unstructured.Unstructured {
 			},
 		},
 	}
+}
+
+func newTestHandlers() (*eventHandlers, chan *tr.Event, chan tr.NodeEvent) {
+	transformerCh := make(chan *tr.Event, 10)
+	reconcilerCh := make(chan tr.NodeEvent, 10)
+	return &eventHandlers{
+		gvrToColumns: &gvrToPrinterColumns{
+			mapping: map[schema.GroupVersionResource][]tr.ExtractProperty{},
+		},
+		transformer: tr.Transformer{Input: transformerCh},
+		reconciler:  &rec.Reconciler{Input: reconcilerCh},
+	}, transformerCh, reconcilerCh
+}
+
+func testResource() *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Pod",
+			"metadata": map[string]interface{}{
+				"name":      "test-pod",
+				"namespace": "default",
+				"uid":       "test-uid-123",
+			},
+		},
+	}
+}
+
+func Test_eventHandlers_createAddHandler(t *testing.T) {
+	config.InitConfig()
+	handlers, transformerCh, _ := newTestHandlers()
+	gvr := schema.GroupVersionResource{
+		Group: "", Version: "v1", Resource: "pods",
+	}
+
+	addFn := handlers.createAddHandler(gvr)
+	addFn(testResource())
+
+	event := <-transformerCh
+	assert.Equal(t, tr.Create, event.Operation)
+	assert.Equal(t, "pods", event.ResourceString)
+	assert.Equal(t, "test-pod", event.Resource.GetName())
+}
+
+func Test_eventHandlers_createUpdateHandler(t *testing.T) {
+	config.InitConfig()
+	handlers, transformerCh, _ := newTestHandlers()
+	gvr := schema.GroupVersionResource{
+		Group: "", Version: "v1", Resource: "pods",
+	}
+
+	updateFn := handlers.createUpdateHandler(gvr)
+	updateFn(testResource(), testResource())
+
+	event := <-transformerCh
+	assert.Equal(t, tr.Update, event.Operation)
+	assert.Equal(t, "pods", event.ResourceString)
+}
+
+func Test_eventHandlers_createDeleteHandler(t *testing.T) {
+	config.InitConfig()
+	handlers, _, reconcilerCh := newTestHandlers()
+	gvr := schema.GroupVersionResource{
+		Group: "", Version: "v1", Resource: "pods",
+	}
+
+	deleteFn := handlers.createDeleteHandler(gvr)
+	deleteFn(testResource())
+
+	ne := <-reconcilerCh
+	assert.Equal(t, tr.Delete, ne.Operation)
+	assert.Contains(t, ne.Node.UID, "test-uid-123")
 }
 
 func Test_isCRDEstablished(t *testing.T) {
