@@ -259,6 +259,30 @@ func Test_watch(t *testing.T) {
 	}
 }
 
+// Verify that Informer.watch() exits when resyncCh is signaled.
+func Test_watch_resyncCh(t *testing.T) {
+	informer, _, _, _ := initInformer()
+
+	stopper := make(chan struct{})
+	defer close(stopper)
+	done := make(chan struct{})
+
+	go func() {
+		informer.watch(stopper)
+		close(done)
+	}()
+
+	time.Sleep(5 * time.Millisecond)
+	informer.TriggerResync()
+
+	select {
+	case <-done:
+		// watch() exited after resyncCh signal. Test passes.
+	case <-time.After(100 * time.Millisecond):
+		t.Error("Informer.watch() did not exit 100ms after TriggerResync()")
+	}
+}
+
 // Verify that WaitUntilInitialized(timeout) times out after passed time duration.
 func Test_WaitUntilInitialized_timeout(t *testing.T) {
 	informer, _, _, _ := initInformer()
@@ -268,5 +292,55 @@ func Test_WaitUntilInitialized_timeout(t *testing.T) {
 	// WaitUntilInitialized() polls every 10ms, so need to confirm that the timeout was triggered within 15ms.
 	if time.Since(start) > time.Duration(15)*time.Millisecond {
 		t.Errorf("Expected WaitUntilInitialized to time out within 15 milliseconds, but got %s", time.Since(start))
+	}
+}
+
+// Verify that InformerForResource initializes resyncCh correctly.
+func TestTriggerResync_ChannelInitialized(t *testing.T) {
+	informer, _ := InformerForResource(schema.GroupVersionResource{
+		Group: "", Version: "v1", Resource: "pods",
+	})
+
+	if informer.resyncCh == nil {
+		t.Fatal("Expected resyncCh to be initialized, got nil")
+	}
+	if cap(informer.resyncCh) != 1 {
+		t.Errorf("Expected resyncCh capacity 1, got %d", cap(informer.resyncCh))
+	}
+}
+
+// Verify that TriggerResync sends a signal and coalesces duplicate signals.
+func TestTriggerResync(t *testing.T) {
+	informer, _ := InformerForResource(schema.GroupVersionResource{
+		Group: "", Version: "v1", Resource: "pods",
+	})
+
+	// First call should queue a signal.
+	informer.TriggerResync()
+	select {
+	case <-informer.resyncCh:
+		// expected
+	default:
+		t.Error("Expected resyncCh to have a signal after TriggerResync()")
+	}
+
+	// Fill the channel again, then call TriggerResync — should not panic (coalesce).
+	informer.resyncCh <- struct{}{}
+	informer.TriggerResync() // non-blocking, should be a no-op
+
+	// Channel should still have exactly one signal.
+	select {
+	case <-informer.resyncCh:
+		// expected — drain the one signal
+	default:
+		t.Error("Expected resyncCh to have a signal")
+	}
+
+	// Now it should be empty.
+	select {
+	case <-informer.resyncCh:
+		t.Error("Expected resyncCh to be empty after draining")
+	default:
+		// expected
 	}
 }

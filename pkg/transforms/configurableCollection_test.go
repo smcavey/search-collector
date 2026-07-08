@@ -1840,14 +1840,14 @@ func TestStatusCondition_MultipleWarnings(t *testing.T) {
 			"metadata":   map[string]interface{}{"name": "merged-collector-config", "namespace": "test-namespace"},
 			"spec": map[string]interface{}{
 				"collectionRules": []interface{}{
-				// Rule 1: include with no fields/collectConditions — triggers "requires at least one field"
-				map[string]interface{}{
-					"action": "include",
-					"resourceSelector": map[string]interface{}{
-						"apiGroups": []interface{}{""},
-						"kinds":     []interface{}{"Pod"},
+					// Rule 1: include with no fields/collectConditions — triggers "requires at least one field"
+					map[string]interface{}{
+						"action": "include",
+						"resourceSelector": map[string]interface{}{
+							"apiGroups": []interface{}{""},
+							"kinds":     []interface{}{"Pod"},
+						},
 					},
-				},
 					// Rule 2: include without fields
 					map[string]interface{}{
 						"action": "include",
@@ -3307,8 +3307,8 @@ func TestExclude_LastEntryWins_IncludeAfterExclude(t *testing.T) {
 				"collectionRules": []interface{}{
 					// Rule 1: include Lease (sets collectConditions)
 					map[string]interface{}{
-						"action":             "include",
-						"collectConditions":  collectConditions,
+						"action":            "include",
+						"collectConditions": collectConditions,
 						"resourceSelector": map[string]interface{}{
 							"apiGroups": []interface{}{"coordination.k8s.io"},
 							"kinds":     []interface{}{"Lease"},
@@ -3324,8 +3324,8 @@ func TestExclude_LastEntryWins_IncludeAfterExclude(t *testing.T) {
 					},
 					// Rule 3: include Lease again — last entry wins, should cancel exclude
 					map[string]interface{}{
-						"action":             "include",
-						"collectConditions":  collectConditions,
+						"action":            "include",
+						"collectConditions": collectConditions,
 						"resourceSelector": map[string]interface{}{
 							"apiGroups": []interface{}{"coordination.k8s.io"},
 							"kinds":     []interface{}{"Lease"},
@@ -3360,8 +3360,8 @@ func TestExclude_LastEntryWins_ExcludeAfterInclude(t *testing.T) {
 				"collectionRules": []interface{}{
 					// Rule 1: include Lease
 					map[string]interface{}{
-						"action":             "include",
-						"collectConditions":  collectConditions,
+						"action":            "include",
+						"collectConditions": collectConditions,
 						"resourceSelector": map[string]interface{}{
 							"apiGroups": []interface{}{"coordination.k8s.io"},
 							"kinds":     []interface{}{"Lease"},
@@ -3458,7 +3458,8 @@ func TestExclude_InvalidIncludeDoesNotCancelExclude(t *testing.T) {
 // Wildcard exclude followed by specific include: the include overrides the wildcard.
 // This is the primary use-case that was previously a documented limitation.
 // A user who wants "collect only Deployments" can now write:
-//   exclude "*.*" (deny all) + include "Deployment.apps" (allow specific)
+//
+//	exclude "*.*" (deny all) + include "Deployment.apps" (allow specific)
 func TestExclude_WildcardOverriddenBySpecificInclude(t *testing.T) {
 	teardown := setupExcludeTest(t)
 	defer teardown()
@@ -3515,7 +3516,7 @@ func TestExclude_NilRules(t *testing.T) {
 		"Should return false when excludeRules is nil")
 }
 
-// Config reload resets excludeRules — old excludes do not persist.
+// CollectorConfig reload resets excludeRules — old excludes do not persist.
 func TestExclude_ResetOnReload(t *testing.T) {
 	teardown := setupExcludeTest(t)
 	defer teardown()

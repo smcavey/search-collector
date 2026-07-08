@@ -433,12 +433,6 @@ func TestIsNamespaceAllowed_NotAllowed(t *testing.T) {
 	assert.False(t, nsFilterCache.isNamespaceAllowed("kube-system"))
 }
 
-var collectorConfigGVR = schema.GroupVersionResource{
-	Group:    "search.open-cluster-management.io",
-	Version:  "v1alpha1",
-	Resource: "collectorconfigs",
-}
-
 // Helper to build a fake dynamic client seeded with a CollectorConfig CR.
 func fakeDynamicClientWithCollectorConfig(nsSelector map[string]interface{}) *dynamicFake.FakeDynamicClient {
 	scheme := runtime.NewScheme()
@@ -464,7 +458,7 @@ func fakeDynamicClientWithCollectorConfig(nsSelector map[string]interface{}) *dy
 
 	return dynamicFake.NewSimpleDynamicClientWithCustomListKinds(scheme,
 		map[schema.GroupVersionResource]string{
-			collectorConfigGVR: "CollectorConfigList",
+			CollectorConfigGVR: "CollectorConfigList",
 		},
 		obj,
 	)
@@ -494,7 +488,7 @@ func TestResolveCollectNamespaces_ConfigNotFound(t *testing.T) {
 	scheme := runtime.NewScheme()
 	dc := dynamicFake.NewSimpleDynamicClientWithCustomListKinds(scheme,
 		map[schema.GroupVersionResource]string{
-			collectorConfigGVR: "CollectorConfigList",
+			CollectorConfigGVR: "CollectorConfigList",
 		},
 	)
 

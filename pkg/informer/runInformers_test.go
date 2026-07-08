@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stolostron/search-collector/pkg/config"
+	rec "github.com/stolostron/search-collector/pkg/reconciler"
 	tr "github.com/stolostron/search-collector/pkg/transforms"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,7 +28,9 @@ var mockUpdateFn = func(gvr schema.GroupVersionResource) func(interface{}, inter
 	return func(old interface{}, new interface{}) {}
 }
 
-var mockDeleteHandler = func(obj interface{}) {}
+var mockDeleteFn = func(gvr schema.GroupVersionResource) func(interface{}) {
+	return func(obj interface{}) {}
+}
 
 func fakeDiscoveryClient() (*httptest.Server, discovery.DiscoveryClient) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -72,7 +75,7 @@ func Test_syncInformers(t *testing.T) {
 	// Establish the config
 	config.InitConfig()
 
-	mockStoppers := make(map[schema.GroupVersionResource]context.CancelFunc)
+	registry := make(map[schema.GroupVersionResource]informerEntry)
 
 	fakeServer, fakeClient := fakeDiscoveryClient()
 	defer fakeServer.Close()
@@ -80,32 +83,33 @@ func Test_syncInformers(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	syncInformers(ctx, fakeClient, mockStoppers, mockAddFn, mockUpdateFn, mockDeleteHandler)
+	syncInformers(ctx, fakeClient, registry, make(map[string]schema.GroupVersionResource),
+		mockAddFn, mockUpdateFn, mockDeleteFn)
 
-	assert.Equal(t, 3, len(mockStoppers))
+	assert.Equal(t, 3, len(registry))
 
-	podInformStopper, exists := mockStoppers[schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}]
+	podEntry, exists := registry[schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}]
 	assert.True(t, exists)
-	assert.NotNil(t, podInformStopper)
+	assert.NotNil(t, podEntry.cancel)
 }
 
 // Validate that informer is stopped when resource no longer exists.
 func Test_syncInformers_removeInformers(t *testing.T) {
-	mockStoppers := make(map[schema.GroupVersionResource]context.CancelFunc)
+	registry := make(map[schema.GroupVersionResource]informerEntry)
 	ctx, cancel := context.WithCancel(context.Background())
-	mockStoppers[schema.GroupVersionResource{Group: "", Version: "v1", Resource: "notExist"}] = cancel
+	registry[schema.GroupVersionResource{Group: "", Version: "v1", Resource: "notExist"}] = informerEntry{cancel: cancel}
 
 	fakeServer, fakeClient := fakeDiscoveryClient()
 	defer fakeServer.Close()
 
-	syncInformers(ctx, fakeClient, mockStoppers, mockAddFn, mockUpdateFn, mockDeleteHandler)
+	syncInformers(ctx, fakeClient, registry, make(map[string]schema.GroupVersionResource),
+		mockAddFn, mockUpdateFn, mockDeleteFn)
 
-	assert.Equal(t, 3, len(mockStoppers))
+	assert.Equal(t, 3, len(registry))
 
 	// Validate that informer is stopped when resource no longer exists.
-	informStopper, exists := mockStoppers[schema.GroupVersionResource{Group: "", Version: "v1", Resource: "notExist"}]
+	_, exists := registry[schema.GroupVersionResource{Group: "", Version: "v1", Resource: "notExist"}]
 	assert.False(t, exists)
-	assert.Nil(t, informStopper)
 }
 
 func getSimpleTransformedCRD() unstructured.Unstructured {
@@ -145,6 +149,78 @@ func getSimpleTransformedCRD() unstructured.Unstructured {
 			},
 		},
 	}
+}
+
+func newTestHandlers() (*eventHandlers, chan *tr.Event, chan tr.NodeEvent) {
+	transformerCh := make(chan *tr.Event, 10)
+	reconcilerCh := make(chan tr.NodeEvent, 10)
+	return &eventHandlers{
+		gvrToColumns: &gvrToPrinterColumns{
+			mapping: map[schema.GroupVersionResource][]tr.ExtractProperty{},
+		},
+		transformer: tr.Transformer{Input: transformerCh},
+		reconciler:  &rec.Reconciler{Input: reconcilerCh},
+	}, transformerCh, reconcilerCh
+}
+
+func testResource() *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Pod",
+			"metadata": map[string]interface{}{
+				"name":      "test-pod",
+				"namespace": "default",
+				"uid":       "test-uid-123",
+			},
+		},
+	}
+}
+
+func Test_eventHandlers_createAddHandler(t *testing.T) {
+	config.InitConfig()
+	handlers, transformerCh, _ := newTestHandlers()
+	gvr := schema.GroupVersionResource{
+		Group: "", Version: "v1", Resource: "pods",
+	}
+
+	addFn := handlers.createAddHandler(gvr)
+	addFn(testResource())
+
+	event := <-transformerCh
+	assert.Equal(t, tr.Create, event.Operation)
+	assert.Equal(t, "pods", event.ResourceString)
+	assert.Equal(t, "test-pod", event.Resource.GetName())
+}
+
+func Test_eventHandlers_createUpdateHandler(t *testing.T) {
+	config.InitConfig()
+	handlers, transformerCh, _ := newTestHandlers()
+	gvr := schema.GroupVersionResource{
+		Group: "", Version: "v1", Resource: "pods",
+	}
+
+	updateFn := handlers.createUpdateHandler(gvr)
+	updateFn(testResource(), testResource())
+
+	event := <-transformerCh
+	assert.Equal(t, tr.Update, event.Operation)
+	assert.Equal(t, "pods", event.ResourceString)
+}
+
+func Test_eventHandlers_createDeleteHandler(t *testing.T) {
+	config.InitConfig()
+	handlers, _, reconcilerCh := newTestHandlers()
+	gvr := schema.GroupVersionResource{
+		Group: "", Version: "v1", Resource: "pods",
+	}
+
+	deleteFn := handlers.createDeleteHandler(gvr)
+	deleteFn(testResource())
+
+	ne := <-reconcilerCh
+	assert.Equal(t, tr.Delete, ne.Operation)
+	assert.Contains(t, ne.UID, "test-uid-123")
 }
 
 func Test_isCRDEstablished(t *testing.T) {

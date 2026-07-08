@@ -24,10 +24,89 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// informerEntry tracks a running informer and its cancel function.
+type informerEntry struct {
+	cancel   context.CancelFunc
+	informer *GenericInformer
+}
+
 var crdGVR = schema.GroupVersionResource{
 	Group:    "apiextensions.k8s.io",
 	Version:  "v1",
 	Resource: "customresourcedefinitions",
+}
+
+// eventHandlers creates informer event handler functions that transform resources
+// and route them to the transformer/reconciler pipeline.
+type eventHandlers struct {
+	ccReloadHandler *ConfigReloadHandler
+	gvrToColumns    *gvrToPrinterColumns
+	transformer     tr.Transformer
+	reconciler      *rec.Reconciler
+}
+
+func (h *eventHandlers) createAddHandler(
+	gvr schema.GroupVersionResource,
+) func(interface{}) {
+	return func(obj interface{}) {
+		resource := obj.(*unstructured.Unstructured)
+
+		if h.ccReloadHandler != nil && gvr == CollectorConfigGVR {
+			h.ccReloadHandler.OnAdd(resource)
+		}
+
+		h.transformer.Input <- &tr.Event{
+			Time:                     time.Now().Unix(),
+			Operation:                tr.Create,
+			Resource:                 resource,
+			ResourceString:           gvr.Resource,
+			AdditionalPrinterColumns: h.gvrToColumns.get(gvr),
+		}
+	}
+}
+
+func (h *eventHandlers) createUpdateHandler(
+	gvr schema.GroupVersionResource,
+) func(interface{}, interface{}) {
+	return func(oldObj, newObj interface{}) {
+		resource := newObj.(*unstructured.Unstructured)
+
+		if h.ccReloadHandler != nil && gvr == CollectorConfigGVR {
+			h.ccReloadHandler.OnUpdate(resource)
+		}
+
+		h.transformer.Input <- &tr.Event{
+			Time:                     time.Now().Unix(),
+			Operation:                tr.Update,
+			Resource:                 resource,
+			ResourceString:           gvr.Resource,
+			AdditionalPrinterColumns: h.gvrToColumns.get(gvr),
+		}
+	}
+}
+
+func (h *eventHandlers) createDeleteHandler(
+	gvr schema.GroupVersionResource,
+) func(interface{}) {
+	return func(obj interface{}) {
+		resource := obj.(*unstructured.Unstructured)
+
+		if h.ccReloadHandler != nil && gvr == CollectorConfigGVR {
+			h.ccReloadHandler.OnDelete(resource)
+		}
+
+		ne := tr.NodeEvent{
+			Time:      time.Now().Unix(),
+			Operation: tr.Delete,
+			Node: tr.Node{
+				UID: strings.Join([]string{
+					config.Cfg.ClusterName,
+					string(resource.GetUID()),
+				}, "/"),
+			},
+		}
+		h.reconciler.Input <- ne
+	}
 }
 
 // transformCRD will strip a CRD to be an unstructured object with the following fields. Note that only the stored
@@ -469,53 +548,34 @@ func RunInformers(
 	// Get kubernetes client for discovering resource types
 	discoveryClient := config.GetDiscoveryClient()
 
-	// We keep each of the informer's stopper channel in a map, so we can stop them if the resource is no longer valid.
-	stoppers := make(map[schema.GroupVersionResource]context.CancelFunc)
+	// We keep each informer entry in a map, so we can stop or resync them as needed.
+	informers := make(map[schema.GroupVersionResource]informerEntry)
 
-	// These functions return handler functions, which are then used in creation of the informers.
-	createInformAddHandler := func(gvr schema.GroupVersionResource) func(interface{}) {
-		return func(obj interface{}) {
-			resource := obj.(*unstructured.Unstructured)
-			upsert := tr.Event{
-				Time:                     time.Now().Unix(),
-				Operation:                tr.Create,
-				Resource:                 resource,
-				ResourceString:           gvr.Resource,
-				AdditionalPrinterColumns: gvrToColumns.get(gvr),
-			}
-			upsertTransformer.Input <- &upsert // Send resource into the transformer input channel
-		}
-	}
-
-	createInformUpdateHandler := func(gvr schema.GroupVersionResource) func(interface{}, interface{}) {
-		return func(oldObj, newObj interface{}) {
-			resource := newObj.(*unstructured.Unstructured)
-			upsert := tr.Event{
-				Time:                     time.Now().Unix(),
-				Operation:                tr.Update,
-				Resource:                 resource,
-				ResourceString:           gvr.Resource,
-				AdditionalPrinterColumns: gvrToColumns.get(gvr),
-			}
-			upsertTransformer.Input <- &upsert // Send resource into the transformer input channel
-		}
-	}
-
-	informDeleteHandler := func(obj interface{}) {
-		resource := obj.(*unstructured.Unstructured)
-		// We don't actually have anything to transform in the case of a deletion, so we manually construct the NodeEvent
-		ne := tr.NodeEvent{
-			Time:      time.Now().Unix(),
-			Operation: tr.Delete,
-			Node: tr.Node{
-				UID: strings.Join([]string{config.Cfg.ClusterName, string(resource.GetUID())}, "/"),
+	// When configurable collection is enabled, create a reload handler that will be
+	// attached to the collectorconfigs GenericInformer to hot-reload config on changes.
+	var ccReloadHandler *ConfigReloadHandler
+	if config.Cfg.FeatureConfigurableCollection {
+		ccReloadHandler = &ConfigReloadHandler{
+			ReloadFn: func() *tr.ReloadResult {
+				return tr.ReloadAndDiff(config.GetDynamicClient())
 			},
 		}
-		reconciler.Input <- ne
 	}
 
+	handlers := &eventHandlers{
+		ccReloadHandler: ccReloadHandler,
+		gvrToColumns:    &gvrToColumns,
+		transformer:     upsertTransformer,
+		reconciler:      reconciler,
+	}
+
+	// resourceNameToGVR maps resources ("Kind" or "Kind.group") to their GVR.
+	// Populated by syncInformers from the discovery API, used for exact-match resync dispatch.
+	resourceNameToGVR := make(map[string]schema.GroupVersionResource)
+
 	// Initialize the informers
-	syncInformers(ctx, *discoveryClient, stoppers, createInformAddHandler, createInformUpdateHandler, informDeleteHandler)
+	syncInformers(ctx, *discoveryClient, informers, resourceNameToGVR,
+		handlers.createAddHandler, handlers.createUpdateHandler, handlers.createDeleteHandler)
 
 	// Close the initialized channel so that we can start the sender.
 	wasInitialized = true
@@ -523,6 +583,24 @@ func RunInformers(
 
 	lastSynced := time.Now()
 	minBetweenSyncs := time.Duration(config.Cfg.RediscoverRateMS) * time.Millisecond
+
+	// Bridge syncInformersQueue (workqueue) into a channel so the main select can
+	// listen for both CRD sync events and config resync signals simultaneously.
+	syncCh := make(chan struct{})
+	go func() {
+		for {
+			item, shutdown := syncInformersQueue.Get()
+			if shutdown {
+				close(syncCh)
+				return
+			}
+			syncInformersQueue.Done(item)
+			select {
+			case syncCh <- struct{}{}:
+			default: // coalesce rapid CRD events
+			}
+		}
+	}()
 
 	// Keep the informers synchronized when CRDs are added or deleted in the cluster.
 	for {
@@ -538,30 +616,44 @@ func RunInformers(
 			dynSharedInformer.Shutdown()
 
 			return
-		default:
 
+		case <-resyncSignal:
+			// Drain all accumulated resources and check if a full sync is needed.
+			configKeys, needSyncInformers := drainPendingResync()
+
+			if needSyncInformers {
+				// Exclude rules changed — rediscover resources and start/stop informers.
+				syncInformers(
+					ctx, *discoveryClient, informers, resourceNameToGVR,
+					handlers.createAddHandler, handlers.createUpdateHandler, handlers.createDeleteHandler,
+				)
+				lastSynced = time.Now()
+			}
+
+			for _, key := range configKeys {
+				dispatchResyncForKey(key, resourceNameToGVR, informers)
+			}
+
+		case _, ok := <-syncCh:
+			if !ok {
+				return // queue was shut down
+			}
+
+			// Enforce a minimum delay between syncs (configurable via REDISCOVER_RATE_MS, default 60s)
+			// to avoid excessive API server calls when multiple CRDs are added or deleted in quick succession.
+			sinceLastSync := time.Since(lastSynced)
+
+			if sinceLastSync < minBetweenSyncs {
+				time.Sleep(minBetweenSyncs - sinceLastSync)
+			}
+
+			syncInformers(
+				ctx, *discoveryClient, informers, resourceNameToGVR,
+				handlers.createAddHandler, handlers.createUpdateHandler, handlers.createDeleteHandler,
+			)
+
+			lastSynced = time.Now()
 		}
-
-		syncRequest, shutdown := syncInformersQueue.Get()
-		if shutdown {
-			return
-		}
-
-		// Enforce a minimum delay between syncs (configurable via REDISCOVER_RATE_MS, default 60s)
-		// to avoid excessive API server calls when multiple CRDs are added or deleted in quick succession.
-		sinceLastSync := time.Since(lastSynced)
-
-		if sinceLastSync < minBetweenSyncs {
-			time.Sleep(minBetweenSyncs - sinceLastSync)
-		}
-
-		syncInformers(
-			ctx, *discoveryClient, stoppers, createInformAddHandler, createInformUpdateHandler, informDeleteHandler,
-		)
-
-		lastSynced = time.Now()
-
-		syncInformersQueue.Done(syncRequest)
 	}
 }
 
@@ -569,16 +661,28 @@ func RunInformers(
 func syncInformers(
 	ctx context.Context,
 	client discovery.DiscoveryClient,
-	stoppers map[schema.GroupVersionResource]context.CancelFunc,
+	registry map[schema.GroupVersionResource]informerEntry,
+	resourceNameToGVR map[string]schema.GroupVersionResource,
 	createInformerAddHandler func(schema.GroupVersionResource) func(interface{}),
 	createInformerUpdateHandler func(schema.GroupVersionResource) func(interface{}, interface{}),
-	informerDeleteHandler func(obj interface{}),
+	createInformerDeleteHandler func(schema.GroupVersionResource) func(interface{}),
 ) {
-	klog.V(2).Infof("Synchronizing informers. Informers running: %d", len(stoppers))
+	klog.V(2).Infof("Synchronizing informers. Informers running: %d", len(registry))
 
-	gvrList, err := SupportedResources(client)
+	gvrList, keyMap, err := SupportedResources(client)
 	if err != nil {
 		klog.Error("Failed to get complete list of supported resources: ", err)
+	}
+
+	// Update the config key → GVR reverse map used for targeted resync dispatch.
+	if keyMap != nil {
+		// Clear and repopulate — discovery may have added or removed resources.
+		for k := range resourceNameToGVR {
+			delete(resourceNameToGVR, k)
+		}
+		for k, v := range keyMap {
+			resourceNameToGVR[k] = v
+		}
 	}
 
 	// Sometimes a partial list will be returned even if there is an error.
@@ -587,15 +691,15 @@ func syncInformers(
 		// Loop through the previous list of resources. If we find the entry in the new list we delete it so
 		// that we don't end up with 2 informers. If we don't find it, we stop the informer that's currently
 		// running because the resource no longer exists (or no longer supports watch).
-		for gvr, stopper := range stoppers {
+		for gvr, entry := range registry {
 			// If this still exists in the new list, delete it from there as we don't want to recreate an informer
 			if _, ok := gvrList[gvr]; ok {
 				delete(gvrList, gvr)
 				continue
 			} else { // if it's in the old and NOT in the new, stop the informer
 				klog.V(2).Infof("Stopping informer: %s", gvr.String())
-				stopper()
-				delete(stoppers, gvr)
+				entry.cancel()
+				delete(registry, gvr)
 			}
 		}
 		// Now, loop through the new list, which after the above deletions, contains only stuff that needs to
@@ -603,20 +707,20 @@ func syncInformers(
 		for gvr := range gvrList {
 			klog.V(2).Infof("Starting informer: %s", gvr.String())
 			// Using our custom informer.
-			informer, _ := InformerForResource(gvr)
+			inform, _ := InformerForResource(gvr)
 
 			// Set up handler to pass this informer's resources into transformer
-			informer.AddFunc = createInformerAddHandler(gvr)
-			informer.UpdateFunc = createInformerUpdateHandler(gvr)
-			informer.DeleteFunc = informerDeleteHandler
+			inform.AddFunc = createInformerAddHandler(gvr)
+			inform.UpdateFunc = createInformerUpdateHandler(gvr)
+			inform.DeleteFunc = createInformerDeleteHandler(gvr)
 
 			informerCtx, informerCancel := context.WithCancel(ctx) // #nosec G118
-			stoppers[gvr] = informerCancel
-			go informer.Run(informerCtx)
+			registry[gvr] = informerEntry{cancel: informerCancel, informer: inform}
+			go inform.Run(informerCtx)
 			// This wait serializes the informer initialization. It is needed to avoid a
 			// spike in memory when the collector starts.
-			informer.WaitUntilInitialized(time.Duration(10) * time.Second) // Times out after 10 seconds.
+			inform.WaitUntilInitialized(time.Duration(10) * time.Second) // Times out after 10 seconds.
 		}
-		klog.V(2).Info("Done synchronizing informers. Informers running: ", len(stoppers))
+		klog.V(2).Info("Done synchronizing informers. Informers running: ", len(registry))
 	}
 }
