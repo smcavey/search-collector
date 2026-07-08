@@ -220,7 +220,7 @@ func Test_eventHandlers_createDeleteHandler(t *testing.T) {
 
 	ne := <-reconcilerCh
 	assert.Equal(t, tr.Delete, ne.Operation)
-	assert.Contains(t, ne.Node.UID, "test-uid-123")
+	assert.Contains(t, ne.UID, "test-uid-123")
 }
 
 func Test_isCRDEstablished(t *testing.T) {
