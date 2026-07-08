@@ -36,6 +36,79 @@ var crdGVR = schema.GroupVersionResource{
 	Resource: "customresourcedefinitions",
 }
 
+// eventHandlers creates informer event handler functions that transform resources
+// and route them to the transformer/reconciler pipeline.
+type eventHandlers struct {
+	ccReloadHandler *ConfigReloadHandler
+	gvrToColumns    *gvrToPrinterColumns
+	transformer     tr.Transformer
+	reconciler      *rec.Reconciler
+}
+
+func (h *eventHandlers) createAddHandler(
+	gvr schema.GroupVersionResource,
+) func(interface{}) {
+	return func(obj interface{}) {
+		resource := obj.(*unstructured.Unstructured)
+
+		if h.ccReloadHandler != nil && gvr == CollectorConfigGVR {
+			h.ccReloadHandler.OnAdd(resource)
+		}
+
+		h.transformer.Input <- &tr.Event{
+			Time:                     time.Now().Unix(),
+			Operation:                tr.Create,
+			Resource:                 resource,
+			ResourceString:           gvr.Resource,
+			AdditionalPrinterColumns: h.gvrToColumns.get(gvr),
+		}
+	}
+}
+
+func (h *eventHandlers) createUpdateHandler(
+	gvr schema.GroupVersionResource,
+) func(interface{}, interface{}) {
+	return func(oldObj, newObj interface{}) {
+		resource := newObj.(*unstructured.Unstructured)
+
+		if h.ccReloadHandler != nil && gvr == CollectorConfigGVR {
+			h.ccReloadHandler.OnUpdate(resource)
+		}
+
+		h.transformer.Input <- &tr.Event{
+			Time:                     time.Now().Unix(),
+			Operation:                tr.Update,
+			Resource:                 resource,
+			ResourceString:           gvr.Resource,
+			AdditionalPrinterColumns: h.gvrToColumns.get(gvr),
+		}
+	}
+}
+
+func (h *eventHandlers) createDeleteHandler(
+	gvr schema.GroupVersionResource,
+) func(interface{}) {
+	return func(obj interface{}) {
+		resource := obj.(*unstructured.Unstructured)
+
+		if h.ccReloadHandler != nil && gvr == CollectorConfigGVR {
+			h.ccReloadHandler.OnDelete(resource)
+		}
+
+		ne := tr.NodeEvent{
+			Time:      time.Now().Unix(),
+			Operation: tr.Delete,
+			Node: tr.Node{
+				UID: strings.Join([]string{
+					config.Cfg.ClusterName,
+					string(resource.GetUID()),
+				}, "/"),
+			},
+		}
+		h.reconciler.Input <- ne
+	}
+}
+
 // transformCRD will strip a CRD to be an unstructured object with the following fields. Note that only the stored
 // version is in the spec.versions array.
 //
@@ -489,66 +562,11 @@ func RunInformers(
 		}
 	}
 
-	// These functions return handler functions, which are then used in creation of the informers.
-	createInformAddHandler := func(gvr schema.GroupVersionResource) func(interface{}) {
-		return func(obj interface{}) {
-			resource := obj.(*unstructured.Unstructured)
-
-			// For CollectorConfig resources, also check for config reload.
-			if ccReloadHandler != nil && gvr == CollectorConfigGVR {
-				ccReloadHandler.OnAdd(resource)
-			}
-
-			upsert := tr.Event{
-				Time:                     time.Now().Unix(),
-				Operation:                tr.Create,
-				Resource:                 resource,
-				ResourceString:           gvr.Resource,
-				AdditionalPrinterColumns: gvrToColumns.get(gvr),
-			}
-			upsertTransformer.Input <- &upsert // Send resource into the transformer input channel
-		}
-	}
-
-	createInformUpdateHandler := func(gvr schema.GroupVersionResource) func(interface{}, interface{}) {
-		return func(oldObj, newObj interface{}) {
-			resource := newObj.(*unstructured.Unstructured)
-
-			// For CollectorConfig resources, also check for config reload.
-			if ccReloadHandler != nil && gvr == CollectorConfigGVR {
-				ccReloadHandler.OnUpdate(resource)
-			}
-
-			upsert := tr.Event{
-				Time:                     time.Now().Unix(),
-				Operation:                tr.Update,
-				Resource:                 resource,
-				ResourceString:           gvr.Resource,
-				AdditionalPrinterColumns: gvrToColumns.get(gvr),
-			}
-			upsertTransformer.Input <- &upsert
-		}
-	}
-
-	createInformDeleteHandler := func(gvr schema.GroupVersionResource) func(interface{}) {
-		return func(obj interface{}) {
-			resource := obj.(*unstructured.Unstructured)
-
-			// For CollectorConfig resources, also check for config reload.
-			if ccReloadHandler != nil && gvr == CollectorConfigGVR {
-				ccReloadHandler.OnDelete(resource)
-			}
-
-			// We don't actually have anything to transform in the case of a deletion, so we manually construct the NodeEvent
-			ne := tr.NodeEvent{
-				Time:      time.Now().Unix(),
-				Operation: tr.Delete,
-				Node: tr.Node{
-					UID: strings.Join([]string{config.Cfg.ClusterName, string(resource.GetUID())}, "/"),
-				},
-			}
-			reconciler.Input <- ne
-		}
+	handlers := &eventHandlers{
+		ccReloadHandler: ccReloadHandler,
+		gvrToColumns:    &gvrToColumns,
+		transformer:     upsertTransformer,
+		reconciler:      reconciler,
 	}
 
 	// resourceNameToGVR maps resources ("Kind" or "Kind.group") to their GVR.
@@ -557,7 +575,7 @@ func RunInformers(
 
 	// Initialize the informers
 	syncInformers(ctx, *discoveryClient, informers, resourceNameToGVR,
-		createInformAddHandler, createInformUpdateHandler, createInformDeleteHandler)
+		handlers.createAddHandler, handlers.createUpdateHandler, handlers.createDeleteHandler)
 
 	// Close the initialized channel so that we can start the sender.
 	wasInitialized = true
@@ -607,7 +625,7 @@ func RunInformers(
 				// Exclude rules changed — rediscover resources and start/stop informers.
 				syncInformers(
 					ctx, *discoveryClient, informers, resourceNameToGVR,
-					createInformAddHandler, createInformUpdateHandler, createInformDeleteHandler,
+					handlers.createAddHandler, handlers.createUpdateHandler, handlers.createDeleteHandler,
 				)
 				lastSynced = time.Now()
 			}
@@ -631,7 +649,7 @@ func RunInformers(
 
 			syncInformers(
 				ctx, *discoveryClient, informers, resourceNameToGVR,
-				createInformAddHandler, createInformUpdateHandler, createInformDeleteHandler,
+				handlers.createAddHandler, handlers.createUpdateHandler, handlers.createDeleteHandler,
 			)
 
 			lastSynced = time.Now()
