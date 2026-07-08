@@ -269,7 +269,9 @@ func mockInformerEntry() informerEntry {
 func TestDispatchResyncForKey(t *testing.T) {
 	podsGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
 	deploymentsGVR := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
-	policiesGVR := schema.GroupVersionResource{Group: "policy.open-cluster-management.io", Version: "v1", Resource: "policies"}
+	policiesGVR := schema.GroupVersionResource{
+		Group: "policy.open-cluster-management.io", Version: "v1", Resource: "policies",
+	}
 	configMapsGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
 
 	resourceNameToGVR := map[string]schema.GroupVersionResource{

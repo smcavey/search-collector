@@ -148,7 +148,8 @@ func loadAndMergeConfigurableCollectionWithClient(dynamicClient dynamic.Interfac
 		fieldSuffix := rule.FieldSuffix
 
 		if rule.Action == v1alpha1.ActionExclude {
-			appendExcludeRule(&newExcludeRules, rule.ResourceSelector.APIGroups, rule.ResourceSelector.Kinds, v1alpha1.ActionExclude)
+			appendExcludeRule(&newExcludeRules,
+				rule.ResourceSelector.APIGroups, rule.ResourceSelector.Kinds, v1alpha1.ActionExclude)
 			continue
 		}
 
@@ -170,7 +171,8 @@ func loadAndMergeConfigurableCollectionWithClient(dynamicClient dynamic.Interfac
 		// which cancels any prior exclude for the same resource during IsResourceExcluded evaluation.
 		// This correctly handles wildcard-vs-specific (e.g. exclude "*.*" followed by
 		// include "Deployment.apps" → Deployments are NOT excluded).
-		appendExcludeRule(&newExcludeRules, rule.ResourceSelector.APIGroups, rule.ResourceSelector.Kinds, v1alpha1.ActionInclude)
+		appendExcludeRule(&newExcludeRules,
+			rule.ResourceSelector.APIGroups, rule.ResourceSelector.Kinds, v1alpha1.ActionInclude)
 
 		apiGroups := rule.ResourceSelector.APIGroups
 		kinds := rule.ResourceSelector.Kinds

@@ -82,7 +82,8 @@ func Test_syncInformers(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	syncInformers(ctx, fakeClient, registry, make(map[string]schema.GroupVersionResource), mockAddFn, mockUpdateFn, mockDeleteFn)
+	syncInformers(ctx, fakeClient, registry, make(map[string]schema.GroupVersionResource),
+		mockAddFn, mockUpdateFn, mockDeleteFn)
 
 	assert.Equal(t, 3, len(registry))
 
@@ -100,7 +101,8 @@ func Test_syncInformers_removeInformers(t *testing.T) {
 	fakeServer, fakeClient := fakeDiscoveryClient()
 	defer fakeServer.Close()
 
-	syncInformers(ctx, fakeClient, registry, make(map[string]schema.GroupVersionResource), mockAddFn, mockUpdateFn, mockDeleteFn)
+	syncInformers(ctx, fakeClient, registry, make(map[string]schema.GroupVersionResource),
+		mockAddFn, mockUpdateFn, mockDeleteFn)
 
 	assert.Equal(t, 3, len(registry))
 

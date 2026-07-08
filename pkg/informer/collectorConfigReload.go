@@ -12,6 +12,9 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// mergedConfigName is the name of the merged CollectorConfig CR managed by the operator.
+const mergedConfigName = "merged-collector-config"
+
 // CollectorConfigGVR is the GVR for the CollectorConfig custom resource.
 var CollectorConfigGVR = schema.GroupVersionResource{
 	Group:    "search.open-cluster-management.io",
@@ -44,7 +47,7 @@ func handleReloadResult(result *tr.ReloadResult) {
 }
 
 func (h *ConfigReloadHandler) OnAdd(obj *unstructured.Unstructured) {
-	if obj.GetName() != "merged-collector-config" {
+	if obj.GetName() != mergedConfigName {
 		return
 	}
 	gen := obj.GetGeneration()
@@ -58,7 +61,7 @@ func (h *ConfigReloadHandler) OnAdd(obj *unstructured.Unstructured) {
 }
 
 func (h *ConfigReloadHandler) OnUpdate(obj *unstructured.Unstructured) {
-	if obj.GetName() != "merged-collector-config" {
+	if obj.GetName() != mergedConfigName {
 		return
 	}
 	gen := obj.GetGeneration()
@@ -72,7 +75,7 @@ func (h *ConfigReloadHandler) OnUpdate(obj *unstructured.Unstructured) {
 }
 
 func (h *ConfigReloadHandler) OnDelete(obj *unstructured.Unstructured) {
-	if obj.GetName() != "merged-collector-config" {
+	if obj.GetName() != mergedConfigName {
 		return
 	}
 	h.LastSeenGeneration = 0
@@ -142,7 +145,11 @@ func drainPendingResync() ([]string, bool) {
 // dispatchResyncForKey triggers informer re-listing for a single resource.
 // For specific kinds (e.g. "Pod", "Deployment.apps") it does an exact GVR lookup.
 // For wildcards (e.g. "*", "*.apps") it resyncs all informers in the matching API group.
-func dispatchResyncForKey(key string, resourceNameToGVR map[string]schema.GroupVersionResource, informers map[schema.GroupVersionResource]informerEntry) {
+func dispatchResyncForKey(
+	key string,
+	resourceNameToGVR map[string]schema.GroupVersionResource,
+	informers map[schema.GroupVersionResource]informerEntry,
+) {
 	kind, group := kindAndGroupFromConfigKey(key)
 
 	if kind != "*" {

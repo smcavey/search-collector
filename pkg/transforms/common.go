@@ -672,7 +672,8 @@ func applyDefaultTransformConfig(node Node, r *unstructured.Unstructured, additi
 	// printer columns so they are available for priority filtering below.
 	// Copy the slice first to avoid mutating the shared backing array from mergedTransformConfig.
 	if found && transformConfig.additionalPrinterColumnsPriority != nil {
-		props := make([]ExtractProperty, len(transformConfig.properties), len(transformConfig.properties)+len(additionalColumns))
+		capacity := len(transformConfig.properties) + len(additionalColumns)
+		props := make([]ExtractProperty, len(transformConfig.properties), capacity)
 		copy(props, transformConfig.properties)
 		transformConfig.properties = append(props, additionalColumns...)
 	}

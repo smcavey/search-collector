@@ -556,7 +556,8 @@ func RunInformers(
 	resourceNameToGVR := make(map[string]schema.GroupVersionResource)
 
 	// Initialize the informers
-	syncInformers(ctx, *discoveryClient, informers, resourceNameToGVR, createInformAddHandler, createInformUpdateHandler, createInformDeleteHandler)
+	syncInformers(ctx, *discoveryClient, informers, resourceNameToGVR,
+		createInformAddHandler, createInformUpdateHandler, createInformDeleteHandler)
 
 	// Close the initialized channel so that we can start the sender.
 	wasInitialized = true
@@ -629,7 +630,8 @@ func RunInformers(
 			}
 
 			syncInformers(
-				ctx, *discoveryClient, informers, resourceNameToGVR, createInformAddHandler, createInformUpdateHandler, createInformDeleteHandler,
+				ctx, *discoveryClient, informers, resourceNameToGVR,
+				createInformAddHandler, createInformUpdateHandler, createInformDeleteHandler,
 			)
 
 			lastSynced = time.Now()

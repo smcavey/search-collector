@@ -101,7 +101,9 @@ func isResourceMatchingList(resourceList []Resource, group, kind string) (string
 
 // Returns a map containing all the GVRs on the cluster of resources that support WATCH (ignoring clusters and events).
 // Also returns a resourceNameToGVR map that maps resources ("Kind" for core, "Kind.group" for non-core) to their GVR.
-func SupportedResources(discoveryClient discovery.DiscoveryClient) (map[schema.GroupVersionResource]struct{}, map[string]schema.GroupVersionResource, error) {
+func SupportedResources(
+	discoveryClient discovery.DiscoveryClient,
+) (map[schema.GroupVersionResource]struct{}, map[string]schema.GroupVersionResource, error) {
 	ctx := context.TODO()
 	// Next step is to discover all the gettable resource types that the kuberenetes api server knows about.
 	supportedResources := []*machineryV1.APIResourceList{}
