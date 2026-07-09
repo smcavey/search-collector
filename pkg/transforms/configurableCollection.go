@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"github.com/stolostron/search-collector/pkg/config"
-	v1alpha1 "github.com/stolostron/search-v2-operator/api/v1alpha1"
+	"github.com/stolostron/search-v2-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -542,14 +542,15 @@ func dataTypeFromCRD(crdType v1alpha1.DataType) DataType {
 	switch crdType {
 	case v1alpha1.DataTypeBytes:
 		return DataTypeBytes
-	case v1alpha1.DataTypeSlice:
-		return DataTypeSlice
 	case v1alpha1.DataTypeString:
 		return DataTypeString
-	case v1alpha1.DataTypeNumber:
+		// return Integer and Float as Number to reuse existing handling in common.go
+	case v1alpha1.DataTypeInteger:
 		return DataTypeNumber
-	case v1alpha1.DataTypeMapString:
-		return DataTypeMapString
+	case v1alpha1.DataTypeFloat:
+		return DataTypeNumber
+	case v1alpha1.DataTypeBoolean:
+		return DataTypeBoolean
 	default:
 		return DataTypeString
 	}
