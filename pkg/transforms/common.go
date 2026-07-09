@@ -857,6 +857,18 @@ func applyDefaultTransformConfig(node Node, r *unstructured.Unstructured, additi
 						prop.Name, kind, group, r.GetName(), val,
 					)
 				}
+			} else if prop.DataType == DataTypeBoolean {
+				// DataTypeBoolean: convert to string representation
+				if b, ok := val.(bool); ok {
+					node.Properties[prop.Name] = strconv.FormatBool(b)
+				} else if strVal, ok := val.(string); ok {
+					node.Properties[prop.Name] = strVal
+				} else {
+					klog.V(1).Infof(
+						"Unable to convert prop [%s] from [%s.%s] Name: [%s] to boolean, unsupported type: %T",
+						prop.Name, kind, group, r.GetName(), val,
+					)
+				}
 			} else {
 				// Fallback for unspecified or unknown DataTypes
 				if kind == "VirtualMachineInstance" && group == "kubevirt.io" && prop.Name == "_interface" {

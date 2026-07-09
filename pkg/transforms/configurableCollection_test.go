@@ -447,9 +447,14 @@ func TestLoadAndMergeConfigurableCollection_DataTypeConversions(t *testing.T) {
 								"type":     "string",
 							},
 							map[string]interface{}{
-								"name":     "numberField",
-								"jsonPath": "{.spec.numberField}",
-								"type":     "number",
+								"name":     "integerField",
+								"jsonPath": "{.spec.integerField}",
+								"type":     "integer",
+							},
+							map[string]interface{}{
+								"name":     "boolField",
+								"jsonPath": "{.spec.boolField}",
+								"type":     "boolean",
 							},
 						},
 					},
@@ -466,15 +471,19 @@ func TestLoadAndMergeConfigurableCollection_DataTypeConversions(t *testing.T) {
 	// Verify TestResource config was created with correct DataTypes
 	testResourceConfig, exists := mergedTransformConfig["TestResource.test.io"]
 	assert.True(t, exists, "TestResource config should exist")
-	assert.Equal(t, 2, len(testResourceConfig.properties), "TestResource should have 2 custom properties")
+	assert.Equal(t, 3, len(testResourceConfig.properties), "TestResource should have 3 custom properties")
 
 	// Verify DataTypeString
 	assert.Equal(t, "stringField", testResourceConfig.properties[0].Name)
 	assert.Equal(t, DataTypeString, testResourceConfig.properties[0].DataType)
 
-	// Verify DataTypeNumber
-	assert.Equal(t, "numberField", testResourceConfig.properties[1].Name)
+	// Verify integer maps to internal DataTypeNumber
+	assert.Equal(t, "integerField", testResourceConfig.properties[1].Name)
 	assert.Equal(t, DataTypeNumber, testResourceConfig.properties[1].DataType)
+
+	// Verify DataTypeBoolean
+	assert.Equal(t, "boolField", testResourceConfig.properties[2].Name)
+	assert.Equal(t, DataTypeBoolean, testResourceConfig.properties[2].DataType)
 }
 
 func TestLoadAndMergeConfigurableCollection_MissingSpec(t *testing.T) {
@@ -1242,7 +1251,7 @@ func TestLoadAndMergeConfigurableCollection_CollectConditionsWithFieldsAndKind(t
 							map[string]interface{}{
 								"name":     "replicas",
 								"jsonPath": "{.spec.replicas}",
-								"type":     "number",
+								"type":     "integer",
 							},
 						},
 					},
@@ -3014,7 +3023,7 @@ func TestLoadAndMergeConfigurableCollection_CollectAnnotationsWithFieldsAndKind(
 							map[string]interface{}{
 								"name":     "replicas",
 								"jsonPath": "{.spec.replicas}",
-								"type":     "number",
+								"type":     "integer",
 							},
 						},
 					},

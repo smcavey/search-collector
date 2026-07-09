@@ -491,6 +491,42 @@ func TestAdditionalPrinterColumns_SpecificConfigPriorityOnly_CollectedViaAdditio
 		"Printer column should be collected when specific config has priority set and columns are passed at runtime")
 }
 
+func TestDataTypeBooleanCoercion(t *testing.T) {
+	// Simulate a resource with boolean and string fields, processed with DataTypeBoolean.
+	resource := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "test.io/v1", "kind": "TestKind",
+		"metadata": map[string]interface{}{"name": "test-resource"},
+		"spec": map[string]interface{}{
+			"enabled":         true,
+			"disabled":        false,
+			"enabledString":   "true",
+			"unsupportedBool": 42,
+		},
+	}}
+
+	// Temporarily register a transform config with DataTypeBoolean fields.
+	key := "TestKind.test.io"
+	if mergedTransformConfig == nil {
+		mergedTransformConfig = make(map[string]ResourceConfig)
+	}
+	mergedTransformConfig[key] = ResourceConfig{
+		properties: []ExtractProperty{
+			{Name: "enabled", JSONPath: "{.spec.enabled}", DataType: DataTypeBoolean},
+			{Name: "disabled", JSONPath: "{.spec.disabled}", DataType: DataTypeBoolean},
+			{Name: "enabledString", JSONPath: "{.spec.enabledString}", DataType: DataTypeBoolean},
+			{Name: "unsupportedBool", JSONPath: "{.spec.unsupportedBool}", DataType: DataTypeBoolean},
+		},
+	}
+	defer delete(mergedTransformConfig, key)
+
+	node := GenericResourceBuilder(resource).BuildNode()
+
+	assert.Equal(t, "true", node.Properties["enabled"], "bool true should be stored as string \"true\"")
+	assert.Equal(t, "false", node.Properties["disabled"], "bool false should be stored as string \"false\"")
+	assert.Equal(t, "true", node.Properties["enabledString"], "string \"true\" should pass through as-is")
+	assert.NotContains(t, node.Properties, "unsupportedBool", "unsupported type should not be stored")
+}
+
 func TestConvertToString(t *testing.T) {
 	tests := []struct {
 		name     string
