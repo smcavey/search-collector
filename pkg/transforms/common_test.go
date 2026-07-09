@@ -497,9 +497,10 @@ func TestDataTypeBooleanCoercion(t *testing.T) {
 		"apiVersion": "test.io/v1", "kind": "TestKind",
 		"metadata": map[string]interface{}{"name": "test-resource"},
 		"spec": map[string]interface{}{
-			"enabled":       true,
-			"disabled":      false,
-			"enabledString": "true",
+			"enabled":         true,
+			"disabled":        false,
+			"enabledString":   "true",
+			"unsupportedBool": 42,
 		},
 	}}
 
@@ -513,6 +514,7 @@ func TestDataTypeBooleanCoercion(t *testing.T) {
 			{Name: "enabled", JSONPath: "{.spec.enabled}", DataType: DataTypeBoolean},
 			{Name: "disabled", JSONPath: "{.spec.disabled}", DataType: DataTypeBoolean},
 			{Name: "enabledString", JSONPath: "{.spec.enabledString}", DataType: DataTypeBoolean},
+			{Name: "unsupportedBool", JSONPath: "{.spec.unsupportedBool}", DataType: DataTypeBoolean},
 		},
 	}
 	defer delete(mergedTransformConfig, key)
@@ -522,6 +524,7 @@ func TestDataTypeBooleanCoercion(t *testing.T) {
 	assert.Equal(t, "true", node.Properties["enabled"], "bool true should be stored as string \"true\"")
 	assert.Equal(t, "false", node.Properties["disabled"], "bool false should be stored as string \"false\"")
 	assert.Equal(t, "true", node.Properties["enabledString"], "string \"true\" should pass through as-is")
+	assert.NotContains(t, node.Properties, "unsupportedBool", "unsupported type should not be stored")
 }
 
 func TestConvertToString(t *testing.T) {
