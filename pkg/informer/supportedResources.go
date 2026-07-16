@@ -124,6 +124,8 @@ func SupportedResources(
 		Get(ctx, "search-collector-config", machineryV1.GetOptions{})
 	if cmErr != nil {
 		klog.Info("Collecting all resources. ConfigMap search-collector-config is not present.", cmErr)
+	} else {
+		klog.Warning("ConfigMap search-collector-config found and will be deprecated in the future by collectorconfigs.search.open-cluster-management.io. Consider migrating.")
 	}
 
 	// parse alloy/deny from config
