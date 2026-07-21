@@ -95,12 +95,15 @@ func main() {
 	reconciler := rec.NewReconciler()
 	reconciler.Input = upsertTransformer.Output
 
-	// Create Sender, attached to transformer
-	sender := send.NewSender(reconciler, config.Cfg.AggregatorURL, config.Cfg.ClusterName)
-
 	informersInitialized := make(chan interface{})
 
 	mainCtx := getMainContext()
+
+	// Start TLS profile poller and create Sender with hot-reload channel.
+	tlsReload := make(chan struct{}, 1)
+	go config.PollTLSProfileConfigMap(mainCtx, tlsReload)
+
+	sender := send.NewSender(reconciler, config.Cfg.AggregatorURL, config.Cfg.ClusterName, tlsReload)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
