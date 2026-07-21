@@ -18,15 +18,16 @@ const tlsPollInterval = 60 * time.Second
 func PollTLSProfileConfigMap(ctx context.Context, reload chan<- struct{}) {
 	kubeClient := GetKubeClient(GetKubeConfig())
 
-	// Read initial state.
+	// Read initial state. If unavailable, keep polling until it appears.
+	var lastData map[string]string
 	cm, err := kubeClient.CoreV1().ConfigMaps(tlsProfileNamespace).
 		Get(ctx, tlsProfileConfigMap, metav1.GetOptions{})
 	if err != nil {
-		klog.Warningf("Could not read initial %s/%s ConfigMap, TLS poller disabled: %v",
+		klog.Warningf("Could not read initial %s/%s ConfigMap, will keep polling: %v",
 			tlsProfileNamespace, tlsProfileConfigMap, err)
-		return
+	} else {
+		lastData = cm.Data
 	}
-	lastData := cm.Data
 	klog.Infof("TLS profile poller started, polling every %s", tlsPollInterval)
 
 	ticker := time.NewTicker(tlsPollInterval)
@@ -46,8 +47,8 @@ func PollTLSProfileConfigMap(ctx context.Context, reload chan<- struct{}) {
 				continue
 			}
 			if !reflect.DeepEqual(lastData, cm.Data) {
-				klog.Infof("TLS profile changed (was %s, now %s), signaling client reload",
-					lastData["profileType"], cm.Data["profileType"])
+				klog.Infof("TLS profile changed (now %s), signaling client reload",
+					cm.Data["profileType"])
 				lastData = cm.Data
 				select {
 				case reload <- struct{}{}:

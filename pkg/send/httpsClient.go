@@ -30,18 +30,23 @@ func getHTTPSClient() (client http.Client) {
 
 	// Klusterlet deployment: Get httpClient using the mounted kubeconfig.
 	if !config.Cfg.DeployedInHub {
-		config.Cfg.AggregatorConfig.NegotiatedSerializer = unstructuredscheme.NewUnstructuredNegotiatedSerializer()
+		// Copy the rest.Config to avoid stacking Wrap calls on the shared global config.
+		restCfg := rest.CopyConfig(config.Cfg.AggregatorConfig)
+		restCfg.NegotiatedSerializer = unstructuredscheme.NewUnstructuredNegotiatedSerializer()
 
 		// Inject TLS profile settings into the rest.Config transport.
-		config.Cfg.AggregatorConfig.Wrap(func(rt http.RoundTripper) http.RoundTripper {
-			if t, ok := rt.(*http.Transport); ok && t.TLSClientConfig != nil {
+		restCfg.Wrap(func(rt http.RoundTripper) http.RoundTripper {
+			if t, ok := rt.(*http.Transport); ok {
+				if t.TLSClientConfig == nil {
+					t.TLSClientConfig = &tls.Config{} // #nosec G402
+				}
 				t.TLSClientConfig.MinVersion = tlsCfg.MinVersion
 				t.TLSClientConfig.CipherSuites = tlsCfg.CipherSuites
 			}
 			return rt
 		})
 
-		aggregatorRESTClient, err := rest.UnversionedRESTClientFor(config.Cfg.AggregatorConfig)
+		aggregatorRESTClient, err := rest.UnversionedRESTClientFor(restCfg)
 		if err != nil {
 			// Exit because this is an unrecoverable configuration problem.
 			klog.Fatal("Error getting httpClient from kubeconfig. Original error: ", err)
