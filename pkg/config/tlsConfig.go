@@ -61,7 +61,7 @@ func getTLSConfigFromEnv() *tls.Config {
 	}
 
 	if os.Getenv("TLS_MIN_VERSION") == "" && os.Getenv("TLS_CIPHERS") == "" {
-		klog.Info("No TLS env vars set, falling back to Intermediate profile")
+		klog.Info("No TLS env vars set, falling back to Intermediate TLS profile")
 		return intermediateProfileTLSConfig()
 	}
 
@@ -77,7 +77,7 @@ func getTLSConfigFromConfigMap() *tls.Config {
 	cm, err := GetKubeClient(GetKubeConfig()).CoreV1().ConfigMaps(namespace).
 		Get(context.TODO(), tlsProfileConfigMap, metav1.GetOptions{})
 	if err != nil {
-		klog.Warningf("Could not read ConfigMap %s/%s, falling back to Intermediate profile: %v",
+		klog.Warningf("Could not read ConfigMap %s/%s, falling back to Intermediate TLS profile: %v",
 			namespace, tlsProfileConfigMap, err)
 		return intermediateProfileTLSConfig()
 	}
