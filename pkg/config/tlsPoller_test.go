@@ -181,11 +181,15 @@ func TestPollTLSProfile_GetErrorDuringPollContinues(t *testing.T) {
 		"minTLSVersion": "VersionTLS13",
 	}
 
+	// Sequence: data1 → error → data1 → data2
+	// The data1 after the error must NOT trigger a reload (proves lastData is preserved).
+	// Only the data2 should trigger exactly one reload.
 	getter := &fakeConfigMapGetter{
 		results: []fakeGetResult{
 			{cm: newConfigMap(data1), err: nil},       // initial read
-			{cm: nil, err: fmt.Errorf("transient")},   // tick — error, should continue
-			{cm: newConfigMap(data2), err: nil},        // tick — changed data
+			{cm: nil, err: fmt.Errorf("transient")},   // tick 1 — error, should continue
+			{cm: newConfigMap(data1), err: nil},        // tick 2 — same data as before error, no signal
+			{cm: newConfigMap(data2), err: nil},        // tick 3 — changed data, signal
 		},
 	}
 
@@ -195,17 +199,15 @@ func TestPollTLSProfile_GetErrorDuringPollContinues(t *testing.T) {
 
 	go pollTLSProfile(ctx, reload, getter, 10*time.Millisecond)
 
-	// Should still detect the change after the transient error.
+	// Should detect the change only when data2 appears (not when data1 returns after error).
 	select {
 	case <-reload:
-		// Expected.
+		// Expected: one signal for data1→data2.
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected reload signal after transient error recovery")
 	}
 
-	// Verify lastData was NOT updated during the error tick
-	// (i.e., the change detection compares against pre-error data, not nil).
-	// If lastData had been reset to nil, we'd get a signal even for same data.
-	// This is implicitly tested: we got exactly one signal for data1→data2.
+	// Verify no extra signals — if lastData had been reset to nil during the error,
+	// the data1 return would have also triggered a spurious signal.
 	assert.Len(t, reload, 0, "should have exactly one signal, no extras")
 }
