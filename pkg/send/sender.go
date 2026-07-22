@@ -360,14 +360,6 @@ func (s *Sender) checkTLSReload() {
 	}
 }
 
-// Returns the smaller of two ints
-func min(a, b int) int {
-	if a > b {
-		return b
-	}
-	return a
-}
-
 // Compute the time interval to wait before next send or retry (backoff).
 func sendInterval(retry int) time.Duration {
 	nextInterval := int(1000*math.Exp2(float64(retry))) + addJitter()
