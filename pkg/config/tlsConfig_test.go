@@ -3,10 +3,8 @@
 package config
 
 import (
-	"context"
 	"crypto/tls"
 	"testing"
-	"time"
 
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/stretchr/testify/assert"
@@ -156,59 +154,4 @@ func TestIntermediateProfileTLSConfig_MatchesOpenShiftProfile(t *testing.T) {
 	assert.Greater(t, len(cfg.CipherSuites), 0)
 	assert.LessOrEqual(t, len(cfg.CipherSuites), len(profile.Ciphers),
 		"should not have more ciphers than the profile defines")
-}
-
-func TestPollTLSProfileConfigMap_ChangeSignalsReload(t *testing.T) {
-	reload := make(chan struct{}, 1)
-	_, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// We can't easily fake the kube client here since PollTLSProfileConfigMap
-	// creates its own. Instead, test the core change-detection logic directly.
-
-	// Simulate: lastData is nil (initial read failed), then ConfigMap appears.
-	var lastData map[string]string
-	newData := map[string]string{
-		"profileType":   "Intermediate",
-		"minTLSVersion": "VersionTLS12",
-		"cipherSuites":  "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
-	}
-
-	// nil != non-nil should trigger a signal.
-	if lastData == nil || lastData["profileType"] != newData["profileType"] {
-		select {
-		case reload <- struct{}{}:
-		default:
-		}
-	}
-
-	select {
-	case <-reload:
-		// Expected: got signal.
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("expected reload signal when ConfigMap appears after initial failure")
-	}
-
-	// Simulate: same data, no signal.
-	lastData = newData
-	sameData := map[string]string{
-		"profileType":   "Intermediate",
-		"minTLSVersion": "VersionTLS12",
-		"cipherSuites":  "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
-	}
-	if lastData["profileType"] != sameData["profileType"] ||
-		lastData["minTLSVersion"] != sameData["minTLSVersion"] ||
-		lastData["cipherSuites"] != sameData["cipherSuites"] {
-		select {
-		case reload <- struct{}{}:
-		default:
-		}
-	}
-
-	select {
-	case <-reload:
-		t.Fatal("should not signal when data is unchanged")
-	case <-time.After(100 * time.Millisecond):
-		// Expected: no signal.
-	}
 }
