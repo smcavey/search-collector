@@ -155,3 +155,48 @@ func TestIntermediateProfileTLSConfig_MatchesOpenShiftProfile(t *testing.T) {
 	assert.LessOrEqual(t, len(cfg.CipherSuites), len(profile.Ciphers),
 		"should not have more ciphers than the profile defines")
 }
+
+func TestGetTLSConfigFromEnv(t *testing.T) {
+	t.Run("both env vars set", func(t *testing.T) {
+		t.Setenv("TLS_MIN_VERSION", "772") // TLS 1.3
+		t.Setenv("TLS_CIPHERS", "TLS_AES_128_GCM_SHA256,TLS_AES_256_GCM_SHA384")
+
+		cfg := getTLSConfigFromEnv()
+		assert.Equal(t, uint16(tls.VersionTLS13), cfg.MinVersion)
+		assert.Len(t, cfg.CipherSuites, 2)
+	})
+
+	t.Run("only TLS_MIN_VERSION set", func(t *testing.T) {
+		t.Setenv("TLS_MIN_VERSION", "771") // TLS 1.2
+		t.Setenv("TLS_CIPHERS", "")
+
+		cfg := getTLSConfigFromEnv()
+		assert.Equal(t, uint16(tls.VersionTLS12), cfg.MinVersion)
+		assert.Nil(t, cfg.CipherSuites)
+	})
+
+	t.Run("invalid TLS_MIN_VERSION falls back to TLS 1.2", func(t *testing.T) {
+		t.Setenv("TLS_MIN_VERSION", "not-a-number")
+		t.Setenv("TLS_CIPHERS", "")
+
+		cfg := getTLSConfigFromEnv()
+		assert.Equal(t, uint16(tls.VersionTLS12), cfg.MinVersion)
+	})
+
+	t.Run("no env vars falls back to Intermediate profile", func(t *testing.T) {
+		t.Setenv("TLS_MIN_VERSION", "")
+		t.Setenv("TLS_CIPHERS", "")
+
+		cfg := getTLSConfigFromEnv()
+		assert.Equal(t, uint16(tls.VersionTLS12), cfg.MinVersion)
+		assert.Greater(t, len(cfg.CipherSuites), 0, "Intermediate profile should have cipher suites")
+	})
+
+	t.Run("all unknown ciphers uses Go defaults", func(t *testing.T) {
+		t.Setenv("TLS_MIN_VERSION", "771")
+		t.Setenv("TLS_CIPHERS", "FAKE_CIPHER_1,FAKE_CIPHER_2")
+
+		cfg := getTLSConfigFromEnv()
+		assert.Nil(t, cfg.CipherSuites, "should fall back to nil (Go defaults) when no ciphers resolve")
+	})
+}

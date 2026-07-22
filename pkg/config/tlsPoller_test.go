@@ -41,7 +41,7 @@ func (f *fakeConfigMapGetter) Get(ctx context.Context, name, namespace string) (
 
 func newConfigMap(data map[string]string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: tlsProfileConfigMap, Namespace: tlsProfileNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: tlsProfileConfigMap, Namespace: "test-ns"},
 		Data:       data,
 	}
 }
@@ -70,7 +70,7 @@ func TestPollTLSProfile_ChangeSignalsReload(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go pollTLSProfile(ctx, reload, getter, 10*time.Millisecond)
+	go pollTLSProfile(ctx, reload, getter, 10*time.Millisecond, "test-ns")
 
 	// Should get a reload signal when data changes.
 	select {
@@ -100,7 +100,7 @@ func TestPollTLSProfile_NoSignalWhenUnchanged(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go pollTLSProfile(ctx, reload, getter, 10*time.Millisecond)
+	go pollTLSProfile(ctx, reload, getter, 10*time.Millisecond, "test-ns")
 
 	// Wait long enough for several ticks.
 	time.Sleep(100 * time.Millisecond)
@@ -132,7 +132,7 @@ func TestPollTLSProfile_InitialErrorThenAppears(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go pollTLSProfile(ctx, reload, getter, 10*time.Millisecond)
+	go pollTLSProfile(ctx, reload, getter, 10*time.Millisecond, "test-ns")
 
 	// nil != non-nil data should trigger a signal.
 	select {
@@ -157,7 +157,7 @@ func TestPollTLSProfile_ContextCancellationStops(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		pollTLSProfile(ctx, reload, getter, 10*time.Millisecond)
+		pollTLSProfile(ctx, reload, getter, 10*time.Millisecond, "test-ns")
 		close(done)
 	}()
 
@@ -197,7 +197,7 @@ func TestPollTLSProfile_GetErrorDuringPollContinues(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go pollTLSProfile(ctx, reload, getter, 10*time.Millisecond)
+	go pollTLSProfile(ctx, reload, getter, 10*time.Millisecond, "test-ns")
 
 	// Should detect the change only when data2 appears (not when data1 returns after error).
 	select {

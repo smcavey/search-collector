@@ -26,20 +26,23 @@ func (k *kubeConfigMapGetter) Get(ctx context.Context, name, namespace string) (
 	return GetKubeClient(GetKubeConfig()).CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
 }
 
-// PollTLSProfileConfigMap polls the ocm-tls-profile ConfigMap and sends on the reload channel
-// when the TLS profile data changes. Blocks until ctx is canceled.
+// PollTLSProfileConfigMap polls the ocm-tls-profile ConfigMap in the pod's namespace and sends on
+// the reload channel when the TLS profile data changes. Blocks until ctx is canceled.
+// Only used for managed cluster deployments; hub deployments use operator-injected env vars.
 func PollTLSProfileConfigMap(ctx context.Context, reload chan<- struct{}) {
-	pollTLSProfile(ctx, reload, &kubeConfigMapGetter{}, tlsPollInterval)
+	pollTLSProfile(ctx, reload, &kubeConfigMapGetter{}, tlsPollInterval, Cfg.PodNamespace)
 }
 
 // pollTLSProfile is the testable core of PollTLSProfileConfigMap.
-func pollTLSProfile(ctx context.Context, reload chan<- struct{}, getter configMapGetter, interval time.Duration) {
+func pollTLSProfile(ctx context.Context, reload chan<- struct{}, getter configMapGetter,
+	interval time.Duration, namespace string) {
+
 	// Read initial state. If unavailable, keep polling until it appears.
 	var lastData map[string]string
-	cm, err := getter.Get(ctx, tlsProfileConfigMap, tlsProfileNamespace)
+	cm, err := getter.Get(ctx, tlsProfileConfigMap, namespace)
 	if err != nil {
 		klog.Warningf("Could not read initial %s/%s ConfigMap, will keep polling: %v",
-			tlsProfileNamespace, tlsProfileConfigMap, err)
+			namespace, tlsProfileConfigMap, err)
 	} else {
 		lastData = cm.Data
 	}
@@ -54,10 +57,10 @@ func pollTLSProfile(ctx context.Context, reload chan<- struct{}, getter configMa
 			klog.Info("TLS profile poller stopped")
 			return
 		case <-ticker.C:
-			cm, err := getter.Get(ctx, tlsProfileConfigMap, tlsProfileNamespace)
+			cm, err := getter.Get(ctx, tlsProfileConfigMap, namespace)
 			if err != nil {
 				klog.Warningf("Error polling %s/%s ConfigMap: %v",
-					tlsProfileNamespace, tlsProfileConfigMap, err)
+					namespace, tlsProfileConfigMap, err)
 				continue
 			}
 			if !reflect.DeepEqual(lastData, cm.Data) {

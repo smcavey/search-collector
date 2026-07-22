@@ -5,6 +5,8 @@ package config
 import (
 	"context"
 	"crypto/tls"
+	"os"
+	"strconv"
 	"strings"
 
 	configv1 "github.com/openshift/api/config/v1"
@@ -14,19 +16,69 @@ import (
 	"k8s.io/klog/v2"
 )
 
-const (
-	tlsProfileConfigMap = "ocm-tls-profile"
-	tlsProfileNamespace = "open-cluster-management-agent-addon"
-)
+const tlsProfileConfigMap = "ocm-tls-profile"
 
-// GetTLSConfig reads the ocm-tls-profile ConfigMap and returns a *tls.Config.
-// Falls back to the OpenShift Intermediate TLS profile if the ConfigMap can't be read.
+// GetTLSConfig returns a *tls.Config based on the deployment mode.
+//
+// Hub deployment: reads TLS_MIN_VERSION and TLS_CIPHERS env vars set by the operator.
+// Managed cluster: reads the ocm-tls-profile ConfigMap from the pod's namespace.
+// Falls back to the OpenShift Intermediate TLS profile if config is unavailable.
 func GetTLSConfig() *tls.Config {
-	cm, err := GetKubeClient(GetKubeConfig()).CoreV1().ConfigMaps(tlsProfileNamespace).
+	if Cfg.DeployedInHub {
+		return getTLSConfigFromEnv()
+	}
+	return getTLSConfigFromConfigMap()
+}
+
+// getTLSConfigFromEnv reads TLS configuration from environment variables set by the operator.
+// This matches the pattern used by search-indexer and search-v2-api.
+//
+// Expected env vars:
+//   - TLS_MIN_VERSION: uint16 value as string (e.g. "771" for TLS 1.2, "772" for TLS 1.3)
+//   - TLS_CIPHERS: comma-separated IANA cipher suite names
+func getTLSConfigFromEnv() *tls.Config {
+	minVersion := uint16(tls.VersionTLS12)
+	var cipherSuites []uint16
+
+	if v := os.Getenv("TLS_MIN_VERSION"); v != "" {
+		parsed, err := strconv.ParseUint(v, 10, 16)
+		if err != nil {
+			klog.Warningf("Invalid TLS_MIN_VERSION %q, using default TLS 1.2: %v", v, err)
+		} else {
+			minVersion = uint16(parsed)
+			klog.Infof("TLS min version from env: TLS 1.%d", (minVersion&0xff)-1)
+		}
+	}
+
+	if v := os.Getenv("TLS_CIPHERS"); v != "" {
+		cipherSuites = cipherSuitesFromNames(v)
+		if len(cipherSuites) == 0 {
+			klog.Warning("No valid cipher suites resolved from TLS_CIPHERS, using Go defaults")
+			cipherSuites = nil
+		} else {
+			klog.Infof("TLS cipher suites from env: %d configured", len(cipherSuites))
+		}
+	}
+
+	if os.Getenv("TLS_MIN_VERSION") == "" && os.Getenv("TLS_CIPHERS") == "" {
+		klog.Info("No TLS env vars set, falling back to Intermediate profile")
+		return intermediateProfileTLSConfig()
+	}
+
+	return &tls.Config{
+		MinVersion:   minVersion, // #nosec G402 - TLS version is set by the operator from the cluster's APIServer TLS profile.
+		CipherSuites: cipherSuites,
+	}
+}
+
+// getTLSConfigFromConfigMap reads the ocm-tls-profile ConfigMap from the pod's namespace.
+func getTLSConfigFromConfigMap() *tls.Config {
+	namespace := Cfg.PodNamespace
+	cm, err := GetKubeClient(GetKubeConfig()).CoreV1().ConfigMaps(namespace).
 		Get(context.TODO(), tlsProfileConfigMap, metav1.GetOptions{})
 	if err != nil {
 		klog.Warningf("Could not read ConfigMap %s/%s, falling back to Intermediate profile: %v",
-			tlsProfileNamespace, tlsProfileConfigMap, err)
+			namespace, tlsProfileConfigMap, err)
 		return intermediateProfileTLSConfig()
 	}
 

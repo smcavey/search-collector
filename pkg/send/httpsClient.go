@@ -25,7 +25,7 @@ import (
 )
 
 func getHTTPSClient() (client http.Client) {
-	// Read TLS profile from ocm-tls-profile ConfigMap (same for hub and managed cluster).
+	// Read TLS config: env vars on hub (set by operator), ConfigMap on managed cluster.
 	tlsCfg := config.GetTLSConfig()
 
 	// Klusterlet deployment: Get httpClient using the mounted kubeconfig.
